@@ -284,14 +284,27 @@ pub fn format_with_config(
                     }
                 }
                 _ => {
-                    if ll.raw_lines.len() == 1 {
+                    if kind == LineKind::InlineFypp && ll.raw_lines.len() == 1 {
+                        // Single-line InlineFypp ($:, @:): only Fypp-specific cleanups.
+                        // Do NOT run whitespace normalization — Fypp lines contain
+                        // Python code and Fypp quoting ({' ... '}) that the Fortran
+                        // normalizer can't parse correctly.
+                        let mut processed = trimmed.to_string();
+                        if config.normalize_keywords {
+                            processed = normalize_keywords(&processed);
+                        }
+                        match config.keyword_case {
+                            KeywordCase::Lower => processed = normalize_case(&processed),
+                            KeywordCase::Upper => processed = normalize_case_upper(&processed),
+                            KeywordCase::Preserve => {}
+                        }
+                        processed = normalize_fypp_lists(&processed);
+                        processed = remove_fypp_macro_paren_space(&processed);
+                        let formatted = apply_indent(processed.trim(), depth, config.indent_width);
+                        output_lines.push(formatted);
+                    } else if ll.raw_lines.len() == 1 {
                         // Single-line: full normalization + rewrap if over limit
                         let mut processed = process_line(trimmed, config);
-                        if kind == LineKind::InlineFypp {
-                            processed = normalize_fypp_lists(&processed);
-                            // Remove space between Fypp macro name and (
-                            processed = remove_fypp_macro_paren_space(&processed);
-                        }
                         let mut formatted =
                             apply_indent(processed.trim(), depth, config.indent_width);
 
@@ -304,10 +317,6 @@ pub fn format_with_config(
                     } else if raw_idx == 0 {
                         // Multi-line: unravel joined line, normalize, rewrap
                         let mut processed = process_line(&ll.joined, config);
-                        if kind == LineKind::InlineFypp {
-                            processed = normalize_fypp_lists(&processed);
-                            processed = remove_fypp_macro_paren_space(&processed);
-                        }
                         let formatted =
                             apply_indent(processed.trim(), depth, config.indent_width);
 
