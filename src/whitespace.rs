@@ -116,6 +116,11 @@ fn add_keyword_paren_spaces(line: &str) -> String {
         if string_mask[paren_pos] {
             continue;
         }
+        // Skip if preceded by : (Fypp macro like @:ALLOCATE or $:DEALLOCATE)
+        let keyword_start = m.start();
+        if keyword_start > 0 && line.as_bytes()[keyword_start - 1] == b':' {
+            continue;
+        }
         result.push_str(&line[last_end..paren_pos]);
         result.push(' ');
         result.push('(');
