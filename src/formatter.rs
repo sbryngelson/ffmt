@@ -150,26 +150,30 @@ pub fn format_with_config(
                     }
                 }
                 _ => {
-                    if ll.raw_lines.len() == 1 || raw_idx == 0 {
-                        // First line (or single line): full normalization
-                        let orig_indent = leading_spaces(trimmed);
+                    if ll.raw_lines.len() == 1 {
+                        // Single-line statement: full normalization
                         let mut processed = process_line(trimmed, config);
-                        // For InlineFypp ($:, @:) lines, normalize comma spacing
-                        // inside '[...]' Fypp list arguments.
                         if kind == LineKind::InlineFypp {
                             processed = normalize_fypp_lists(&processed);
                         }
-                        // Ensure space before trailing & on continuation lines,
-                        // but NOT for Fypp !& continuations
-                        if ll.raw_lines.len() > 1 && processed.trim_end().ends_with('&') {
-                            let t = processed.trim_end();
-                            if t.len() >= 2
-                                && t.as_bytes()[t.len() - 2] != b' '
-                                && t.as_bytes()[t.len() - 2] != b'!'
-                            {
-                                let pos = t.len() - 1;
-                                processed = format!("{} &", &t[..pos]);
-                            }
+                        let formatted =
+                            apply_indent(processed.trim(), depth, config.indent_width);
+                        output_lines.push(formatted);
+                    } else if raw_idx == 0 {
+                        // First line of multi-line statement: keyword + case only,
+                        // preserve whitespace (developer has intentional alignment)
+                        let orig_indent = leading_spaces(trimmed);
+                        let mut processed = trimmed.to_string();
+                        if config.normalize_keywords {
+                            processed = normalize_keywords(&processed);
+                        }
+                        match config.keyword_case {
+                            KeywordCase::Lower => processed = normalize_case(&processed),
+                            KeywordCase::Upper => processed = normalize_case_upper(&processed),
+                            KeywordCase::Preserve => {}
+                        }
+                        if kind == LineKind::InlineFypp {
+                            processed = normalize_fypp_lists(&processed);
                         }
                         let formatted =
                             apply_indent(processed.trim(), depth, config.indent_width);
