@@ -411,31 +411,44 @@ fn wrap_comment(line: &str, max_length: usize, _depth: usize, _indent_width: usi
     let text = &content[text_start..];
 
     let prefix = " ".repeat(indent);
-    let line_prefix = format!("{}{} ", prefix, marker);
-    let avail = if max_length > line_prefix.len() {
-        max_length - line_prefix.len()
+    let first_prefix = format!("{}{} ", prefix, marker);
+    // Doxygen: first line uses !>, continuation lines use !!
+    let cont_marker = if marker == "!>" { "!!" } else { marker };
+    let cont_prefix = format!("{}{} ", prefix, cont_marker);
+    let first_avail = if max_length > first_prefix.len() {
+        max_length - first_prefix.len()
     } else {
-        40 // minimum
+        40
+    };
+    let cont_avail = if max_length > cont_prefix.len() {
+        max_length - cont_prefix.len()
+    } else {
+        40
     };
 
     // Split text at word boundaries
     let words: Vec<&str> = text.split_whitespace().collect();
     let mut result: Vec<String> = Vec::new();
     let mut current_line = String::new();
+    let mut is_first = true;
 
     for word in &words {
+        let avail = if is_first { first_avail } else { cont_avail };
         if current_line.is_empty() {
             current_line = word.to_string();
         } else if current_line.len() + 1 + word.len() <= avail {
             current_line.push(' ');
             current_line.push_str(word);
         } else {
-            result.push(format!("{}{}", line_prefix, current_line));
+            let pfx = if is_first { &first_prefix } else { &cont_prefix };
+            result.push(format!("{}{}", pfx, current_line));
             current_line = word.to_string();
+            is_first = false;
         }
     }
     if !current_line.is_empty() {
-        result.push(format!("{}{}", line_prefix, current_line));
+        let pfx = if is_first { &first_prefix } else { &cont_prefix };
+        result.push(format!("{}{}", pfx, current_line));
     }
 
     if result.is_empty() {
