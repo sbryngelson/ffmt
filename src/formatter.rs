@@ -171,8 +171,13 @@ pub fn format_with_config(
         idx += 1;
     }
 
+    // Strip trailing blank lines
+    while output_lines.last().is_some_and(|l| l.is_empty()) {
+        output_lines.pop();
+    }
+
     let mut result = output_lines.join("\n");
-    if !result.ends_with('\n') {
+    if !result.is_empty() && !result.ends_with('\n') {
         result.push('\n');
     }
     result
