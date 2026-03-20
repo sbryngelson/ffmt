@@ -6,6 +6,7 @@ pub mod case_norm;
 pub mod keyword_norm;
 pub mod formatter;
 pub mod config;
+pub mod align;
 pub mod cli;
 pub mod lsp;
 

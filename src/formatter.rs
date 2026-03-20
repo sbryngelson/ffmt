@@ -6,6 +6,30 @@ use crate::reader::read_logical_lines;
 use crate::scope::ScopeTracker;
 use crate::whitespace::normalize_whitespace;
 
+/// Ensure a space after `!` in regular comments (not directives, Doxygen, Fypp).
+fn normalize_comment_space(comment: &str) -> String {
+    let bytes = comment.as_bytes();
+    if bytes.is_empty() || bytes[0] != b'!' {
+        return comment.to_string();
+    }
+    if bytes.len() == 1 {
+        return comment.to_string();
+    }
+    let second = bytes[1];
+    if second == b' '
+        || second == b'$'
+        || second == b'<'
+        || second == b'>'
+        || second == b'!'
+        || second == b'*'
+        || second == b'@'
+        || second == b'&'
+    {
+        return comment.to_string();
+    }
+    format!("! {}", &comment[1..])
+}
+
 /// Apply indentation to a line. Strips existing leading whitespace and adds
 /// `depth * indent_width` spaces. Blank lines remain blank.
 fn apply_indent(line: &str, depth: usize, indent_width: usize) -> String {
@@ -122,10 +146,12 @@ pub fn format_with_config(
             match kind {
                 LineKind::Comment => {
                     let content = trimmed.trim_start();
+                    // Normalize space after ! for regular comments
+                    let content = normalize_comment_space(content);
                     if content.starts_with("!!") {
                         output_lines.push(trimmed.to_string());
                     } else {
-                        output_lines.push(apply_indent(content, depth, config.indent_width));
+                        output_lines.push(apply_indent(&content, depth, config.indent_width));
                     }
                 }
                 LineKind::Blank => unreachable!(),
@@ -196,6 +222,9 @@ pub fn format_with_config(
     while output_lines.last().is_some_and(|l| l.is_empty()) {
         output_lines.pop();
     }
+
+    // Align :: in consecutive declaration lines
+    output_lines = crate::align::align_declarations(&output_lines);
 
     let mut result = output_lines.join("\n");
     if !result.is_empty() && !result.ends_with('\n') {

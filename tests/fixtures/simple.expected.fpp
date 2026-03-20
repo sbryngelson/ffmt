@@ -3,7 +3,7 @@ module m_test
     implicit none
     private; public :: s_foo
     integer :: x
-    real :: y
+    real    :: y
 contains
     subroutine s_foo(a, b)
         integer, intent(in) :: a, b

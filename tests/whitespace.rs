@@ -108,7 +108,7 @@ fn test_exponent_notation() {
 // --- Inline comment spacing ---
 #[test]
 fn test_inline_comment() {
-    assert_eq!(normalize_whitespace("x = 1!comment"), "x = 1 !comment");
+    assert_eq!(normalize_whitespace("x = 1!comment"), "x = 1 ! comment");
 }
 // --- Unary minus/plus after various operators ---
 #[test]
@@ -199,4 +199,76 @@ fn test_scientific_notation_dot_e() {
 #[test]
 fn test_scientific_notation_dot_e_plus() {
     assert_eq!(normalize_whitespace("x = 1.e+6_wp"), "x = 1.e+6_wp");
+}
+
+// --- Feature 7: Space after ! in comments ---
+#[test]
+fn test_comment_space_after_bang() {
+    assert_eq!(normalize_whitespace("!comment here"), "! comment here");
+}
+#[test]
+fn test_comment_already_spaced() {
+    assert_eq!(normalize_whitespace("! comment here"), "! comment here");
+}
+#[test]
+fn test_comment_directive_preserved() {
+    assert_eq!(normalize_whitespace("!$acc parallel"), "!$acc parallel");
+}
+#[test]
+fn test_comment_doxygen_lt_preserved() {
+    assert_eq!(
+        normalize_whitespace("x = 1 !< doxygen"),
+        "x = 1 !< doxygen"
+    );
+}
+#[test]
+fn test_comment_doxygen_double_bang_no_space() {
+    assert_eq!(normalize_whitespace("!! doxygen"), "!! doxygen");
+}
+#[test]
+fn test_comment_fypp_continuation() {
+    assert_eq!(normalize_whitespace("x = 1 !&"), "x = 1 !&");
+}
+
+// --- Feature 8: Collapse double spaces ---
+#[test]
+fn test_collapse_double_spaces() {
+    assert_eq!(normalize_whitespace("x  =  y  +  z"), "x = y + z");
+}
+#[test]
+fn test_collapse_spaces_in_string_preserved() {
+    assert_eq!(
+        normalize_whitespace("x = 'a  b  c'"),
+        "x = 'a  b  c'"
+    );
+}
+#[test]
+fn test_collapse_spaces_in_comment_preserved() {
+    assert_eq!(
+        normalize_whitespace("x = 1 !  spaced  comment"),
+        "x = 1 !  spaced  comment"
+    );
+}
+
+// --- Feature 9: intent(in) consistency ---
+#[test]
+fn test_intent_no_space() {
+    assert_eq!(
+        normalize_whitespace("integer, intent(in) :: x"),
+        "integer, intent(in) :: x"
+    );
+}
+#[test]
+fn test_intent_space_removed() {
+    assert_eq!(
+        normalize_whitespace("integer, intent (in) :: x"),
+        "integer, intent(in) :: x"
+    );
+}
+#[test]
+fn test_intent_inout() {
+    assert_eq!(
+        normalize_whitespace("real(wp), intent (inout) :: y"),
+        "real(wp), intent(inout) :: y"
+    );
 }

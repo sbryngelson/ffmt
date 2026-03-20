@@ -61,7 +61,9 @@ pub fn normalize_whitespace(line: &str, ws_config: &WhitespaceConfig) -> String 
 
     let tokens = tokenize(trimmed);
     let rendered = render(&tokens, ws_config);
-    add_keyword_paren_spaces(&rendered)
+    let with_keywords = add_keyword_paren_spaces(&rendered);
+    let with_intent = normalize_intent_paren(&with_keywords);
+    collapse_double_spaces(&with_intent)
 }
 
 /// Add a space between control-flow keywords and `(` where missing.
@@ -152,6 +154,127 @@ fn is_exponent_sign(bytes: &[u8], pos: usize) -> bool {
     }
     let before_ed = bytes[pos - 2];
     before_ed.is_ascii_digit() || before_ed == b'.'
+}
+
+/// Normalize a regular `!` comment to ensure a space after `!`.
+/// Leaves directives (`!$acc`, `!$omp`), Doxygen markers (`!<`, `!>`, `!!`, `!*`, `!@`),
+/// and Fypp continuation (`!&`) unchanged.
+fn normalize_comment_bang(comment: &str) -> String {
+    let bytes = comment.as_bytes();
+    // Must start with '!'
+    if bytes.is_empty() || bytes[0] != b'!' {
+        return comment.to_string();
+    }
+    // If just "!", leave as-is
+    if bytes.len() == 1 {
+        return comment.to_string();
+    }
+    let second = bytes[1];
+    // Already has space, or is a special marker — leave unchanged
+    if second == b' '
+        || second == b'$'
+        || second == b'<'
+        || second == b'>'
+        || second == b'!'
+        || second == b'*'
+        || second == b'@'
+        || second == b'&'
+    {
+        return comment.to_string();
+    }
+    // Insert space after '!'
+    format!("! {}", &comment[1..])
+}
+
+/// Remove space between `intent` and `(` — convention is `intent(in)` not `intent (in)`.
+fn normalize_intent_paren(line: &str) -> String {
+    use regex::Regex;
+    use std::sync::OnceLock;
+
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| Regex::new(r"(?i)\bintent\s+\(").unwrap());
+
+    re.replace_all(line, |caps: &regex::Captures| {
+        let matched = caps.get(0).unwrap().as_str();
+        // Replace any whitespace between intent and ( with nothing
+        let lower = matched.to_ascii_lowercase();
+        if lower.starts_with("intent") {
+            // Preserve original case of "intent"
+            let intent_part = &matched[..6];
+            format!("{}(", intent_part)
+        } else {
+            matched.to_string()
+        }
+    })
+    .to_string()
+}
+
+/// Collapse runs of 2+ spaces to a single space outside of strings and comments.
+fn collapse_double_spaces(line: &str) -> String {
+    let bytes = line.as_bytes();
+    let len = bytes.len();
+    let mut result = String::with_capacity(len);
+    let mut i = 0;
+    let mut in_string = false;
+    let mut quote_char = b' ';
+
+    while i < len {
+        let ch = bytes[i];
+
+        if in_string {
+            result.push(ch as char);
+            if ch == quote_char {
+                if i + 1 < len && bytes[i + 1] == quote_char {
+                    // Escaped quote
+                    result.push(bytes[i + 1] as char);
+                    i += 2;
+                    continue;
+                }
+                in_string = false;
+            }
+            i += 1;
+            continue;
+        }
+
+        // Start of comment — copy rest verbatim
+        if ch == b'!' {
+            result.push_str(&line[i..]);
+            break;
+        }
+
+        // Start of string
+        if ch == b'\'' || ch == b'"' {
+            in_string = true;
+            quote_char = ch;
+            result.push(ch as char);
+            i += 1;
+            continue;
+        }
+
+        // Space — collapse runs, but preserve spacing before comments
+        if ch == b' ' {
+            let space_start = i;
+            while i < len && bytes[i] == b' ' {
+                i += 1;
+            }
+            // If spaces lead up to a comment '!', preserve them verbatim
+            // (Doxygen comment alignment)
+            if i < len && bytes[i] == b'!' {
+                result.push_str(&line[space_start..i]);
+            } else if i - space_start >= 2 {
+                // Collapse multiple spaces to one
+                result.push(' ');
+            } else {
+                result.push(' ');
+            }
+            continue;
+        }
+
+        result.push(ch as char);
+        i += 1;
+    }
+
+    result
 }
 
 /// Tokenize a trimmed Fortran line into a sequence of Token values.
@@ -268,7 +391,11 @@ fn tokenize(line: &str) -> Vec<Token> {
                 let full_comment = format!("{}{}", spacing, comment_text);
                 tokens.push(Token::Op(OpKind::Comment, full_comment));
             } else {
-                tokens.push(Token::Op(OpKind::Comment, String::from(comment_text)));
+                // Feature 7: ensure space after `!` in regular comments.
+                // Skip directives (!$acc, !$omp), Fypp continuation (!&),
+                // and already-spaced comments.
+                let normalized_comment = normalize_comment_bang(comment_text);
+                tokens.push(Token::Op(OpKind::Comment, normalized_comment));
             }
             break;
         }
