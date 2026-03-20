@@ -600,10 +600,8 @@ fn find_token_breaks(content: &str) -> Vec<(usize, BreakKind)> {
             if paren_depth < 0 {
                 paren_depth = 0;
             }
-            // Break after close paren at low depth
-            if paren_depth <= 1 {
-                breaks.push((i + 1, BreakKind::CloseParen));
-            }
+            // Break after close paren at any depth
+            breaks.push((i + 1, BreakKind::CloseParen));
         }
 
         // Comma — best break point (after the comma + space)
@@ -616,8 +614,8 @@ fn find_token_breaks(content: &str) -> Vec<(usize, BreakKind)> {
             breaks.push((end, BreakKind::Comma));
         }
 
-        // Binary operators at low paren depth
-        if paren_depth <= 1 {
+        // Binary operators at any paren depth
+        {
             // Multi-char operators: check for //, /=, ==, <=, >=, =>, **
             if b == b'/' && i + 1 < len && bytes[i + 1] == b'/' {
                 // // (concat) — break before it if preceded by space
