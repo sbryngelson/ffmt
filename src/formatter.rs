@@ -258,11 +258,12 @@ fn process_continuation_line(line: &str, config: &Config, indent_delta: isize) -
 
     let normalized = normalized.trim();
 
-    // Re-add trailing &
+    // Re-add trailing & (preserving any !& Fypp continuation after it)
     let with_trailing = if trailing.is_empty() {
         normalized.to_string()
     } else {
-        format!("{} &", normalized)
+        let trail = trailing.trim();
+        format!("{} {}", normalized, trail)
     };
 
     // Re-add leading & if it was present
