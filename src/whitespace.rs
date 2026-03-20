@@ -181,6 +181,17 @@ fn tokenize(line: &str) -> Vec<Token> {
             // preserve the original spacing before the ! by capturing
             // any preceding whitespace as part of the comment token.
             let comment_text = &line[i..];
+            // Check for Fypp continuation: !& at end of line — preserve verbatim
+            if comment_text.trim_end() == "!&" {
+                // Keep the !& exactly as-is with its preceding spacing
+                while matches!(tokens.last(), Some(Token::Space)) {
+                    tokens.pop();
+                }
+                let prev_content_end = out_position_before_spaces(line, i);
+                let full = format!("{}{}", &line[prev_content_end..i], comment_text.trim_end());
+                tokens.push(Token::Op(OpKind::Comment, full));
+                break;
+            }
             let is_doxygen = comment_text.len() > 1
                 && matches!(comment_text.as_bytes()[1], b'<' | b'>' | b'!' | b'*' | b'@');
             if is_doxygen {

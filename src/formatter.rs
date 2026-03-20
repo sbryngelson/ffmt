@@ -154,10 +154,14 @@ pub fn format_with_config(
                         // First line (or single line): full normalization
                         let orig_indent = leading_spaces(trimmed);
                         let mut processed = process_line(trimmed, config);
-                        // Ensure space before trailing & on continuation lines
+                        // Ensure space before trailing & on continuation lines,
+                        // but NOT for Fypp !& continuations
                         if ll.raw_lines.len() > 1 && processed.trim_end().ends_with('&') {
                             let t = processed.trim_end();
-                            if t.len() >= 2 && t.as_bytes()[t.len() - 2] != b' ' {
+                            if t.len() >= 2
+                                && t.as_bytes()[t.len() - 2] != b' '
+                                && t.as_bytes()[t.len() - 2] != b'!'
+                            {
                                 let pos = t.len() - 1;
                                 processed = format!("{} &", &t[..pos]);
                             }
