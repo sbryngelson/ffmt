@@ -73,13 +73,6 @@ fn find_continuation_amp(line: &str) -> Option<usize> {
     last_amp_byte
 }
 
-/// Check if a line is a Fypp continuation: ends with `!&` (possibly after
-/// whitespace). The `!&` must be outside string literals.
-fn is_fypp_continuation(line: &str) -> bool {
-    let trimmed = line.trim_end();
-    trimmed.ends_with("!&")
-}
-
 /// Strip the leading `&` from a continuation line if present (after optional
 /// leading whitespace).
 fn strip_leading_amp(line: &str) -> &str {
@@ -139,17 +132,13 @@ pub fn read_logical_lines(source: &str) -> Vec<LogicalLine> {
             continue;
         }
 
-        // Check for Fypp continuation (`!&` at end of line)
-        let fypp_cont = is_fypp_continuation(raw_line);
+        // Check for Fortran continuation (`&` at end of line outside strings).
+        // Note: Fypp `!&` continuations are NOT joined — they are Fypp-level
+        // continuations handled by the Fypp preprocessor, not the formatter.
+        // The `!` starts a comment, so `find_continuation_amp` won't see the `&`.
+        let fort_cont = find_continuation_amp(raw_line).is_some();
 
-        // Check for Fortran continuation (`&` at end of line outside strings)
-        let fort_cont = if !fypp_cont {
-            find_continuation_amp(raw_line).is_some()
-        } else {
-            false
-        };
-
-        if !fypp_cont && !fort_cont {
+        if !fort_cont {
             // Simple line, no continuation
             result.push(LogicalLine {
                 joined: raw_line.to_string(),
@@ -160,21 +149,13 @@ pub fn read_logical_lines(source: &str) -> Vec<LogicalLine> {
             continue;
         }
 
-        // Continuation: gather lines
+        // Fortran continuation: gather lines joined by `&`
         let mut raw_lines_acc: Vec<String> = Vec::new();
         let mut joined_parts: Vec<String> = Vec::new();
 
-        // Process first line: strip trailing `&` (Fortran) or `!&` (Fypp)
-        let first_content = if fort_cont {
-            // Remove the trailing `&` (and any whitespace after it, up to comment)
-            // find_continuation_amp returns byte offset of the `&`
-            let amp_pos = find_continuation_amp(raw_line).unwrap();
-            raw_line[..amp_pos].to_string()
-        } else {
-            // Fypp: remove the trailing `!&`
-            let end = raw_line.trim_end().len() - 2; // strip `!&`
-            raw_line[..end].to_string()
-        };
+        // Process first line: strip trailing `&`
+        let amp_pos = find_continuation_amp(raw_line).unwrap();
+        let first_content = raw_line[..amp_pos].to_string();
 
         raw_lines_acc.push(raw_line.to_string());
         joined_parts.push(first_content);
@@ -199,19 +180,11 @@ pub fn read_logical_lines(source: &str) -> Vec<LogicalLine> {
             let stripped = strip_leading_amp(cont_line);
 
             // Check if this continuation line itself continues further
-            let this_fypp = is_fypp_continuation(stripped);
-            let this_fort = if !this_fypp {
-                find_continuation_amp(stripped).is_some()
-            } else {
-                false
-            };
+            let this_fort = find_continuation_amp(stripped).is_some();
 
             let content = if this_fort {
                 let amp_pos = find_continuation_amp(stripped).unwrap();
                 stripped[..amp_pos].to_string()
-            } else if this_fypp {
-                let end = stripped.trim_end().len() - 2;
-                stripped[..end].to_string()
             } else {
                 stripped.to_string()
             };
@@ -219,7 +192,7 @@ pub fn read_logical_lines(source: &str) -> Vec<LogicalLine> {
             joined_parts.push(content);
             i += 1;
 
-            if !this_fort && !this_fypp {
+            if !this_fort {
                 break;
             }
         }

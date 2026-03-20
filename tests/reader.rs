@@ -27,10 +27,11 @@ fn test_blank_lines_preserved() {
 }
 
 #[test]
-fn test_fypp_continuation() {
+fn test_fypp_continuation_not_joined() {
+    // !& is a Fypp-level continuation — the formatter treats each line independently
     let input = "#:if defined('FOO') !&\n    & .or. defined('BAR')\n";
     let lines = read_logical_lines(input);
-    assert_eq!(lines.len(), 1);
+    assert_eq!(lines.len(), 2);
 }
 
 #[test]
