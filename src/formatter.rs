@@ -235,15 +235,24 @@ fn process_continuation_line(line: &str, config: &Config, indent_delta: isize) -
     // Check for trailing & (this line continues further)
     let (main_content, trailing) = split_trailing_amp(content);
 
-    // Apply keyword and case normalization only.
-    // Whitespace normalization is skipped on continuation lines because
-    // the normalizer lacks context from the previous line and misclassifies
-    // leading +/- as unary operators instead of binary.
+    // Apply full normalization. To prevent the whitespace normalizer from
+    // treating leading +/- as unary, we prepend a dummy operand "0 " so
+    // the normalizer sees binary context, then strip it from the output.
     let mut normalized = main_content.to_string();
 
     if config.normalize_keywords {
         normalized = normalize_keywords(&normalized);
     }
+
+    let dummy_prefix = "0 ";
+    let with_dummy = format!("{}{}", dummy_prefix, normalized.trim_start());
+    let ws_normalized = normalize_whitespace(&with_dummy, &config.whitespace);
+    // Strip the dummy prefix
+    normalized = ws_normalized
+        .strip_prefix("0 ")
+        .or_else(|| ws_normalized.strip_prefix("0"))
+        .unwrap_or(&ws_normalized)
+        .to_string();
 
     match config.keyword_case {
         KeywordCase::Lower => normalized = normalize_case(&normalized),
