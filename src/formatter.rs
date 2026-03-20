@@ -213,12 +213,15 @@ pub fn format_with_config(
             match kind {
                 LineKind::Comment => {
                     let content = trimmed.trim_start();
-                    // Normalize space after ! for regular comments
                     let content = normalize_comment_space(content);
                     if content.starts_with("!!") {
+                        // Doxygen continuation: preserve as-is
                         output_lines.push(trimmed.to_string());
                     } else {
-                        output_lines.push(apply_indent(&content, depth, config.indent_width));
+                        let indented = apply_indent(&content, depth, config.indent_width);
+                        // Wrap long comments at word boundaries
+                        let wrapped = wrap_comment(&indented, config.line_length, depth, config.indent_width);
+                        output_lines.extend(wrapped);
                     }
                 }
                 LineKind::Blank => unreachable!(),
@@ -244,7 +247,7 @@ pub fn format_with_config(
                 }
                 _ => {
                     if ll.raw_lines.len() == 1 {
-                        // Single-line statement: full normalization
+                        // Single-line: full normalization + rewrap if over limit
                         let mut processed = process_line(trimmed, config);
                         if kind == LineKind::InlineFypp {
                             processed = normalize_fypp_lists(&processed);
@@ -252,37 +255,32 @@ pub fn format_with_config(
                         let mut formatted =
                             apply_indent(processed.trim(), depth, config.indent_width);
 
-                        // Feature 3: Named end statements
                         if kind == LineKind::FortranBlockClose {
                             formatted = maybe_add_end_name(&formatted, &tracker, config);
                         }
 
-                        output_lines.push(formatted);
+                        let wrapped = rewrap_line(&formatted, config.line_length, config.indent_width);
+                        output_lines.extend(wrapped);
                     } else if raw_idx == 0 {
-                        // First line of multi-line statement: keyword + case only,
-                        // preserve whitespace (developer has intentional alignment)
-                        let orig_indent = leading_spaces(trimmed);
-                        let mut processed = trimmed.to_string();
-                        if config.normalize_keywords {
-                            processed = normalize_keywords(&processed);
-                        }
-                        match config.keyword_case {
-                            KeywordCase::Lower => processed = normalize_case(&processed),
-                            KeywordCase::Upper => processed = normalize_case_upper(&processed),
-                            KeywordCase::Preserve => {}
-                        }
+                        // Multi-line: unravel joined line, normalize, rewrap
+                        let mut processed = process_line(&ll.joined, config);
                         if kind == LineKind::InlineFypp {
                             processed = normalize_fypp_lists(&processed);
                         }
                         let formatted =
                             apply_indent(processed.trim(), depth, config.indent_width);
-                        let new_indent = leading_spaces(&formatted);
-                        indent_delta = new_indent as isize - orig_indent as isize;
-                        output_lines.push(formatted);
+
+                        let formatted = if kind == LineKind::FortranBlockClose {
+                            maybe_add_end_name(&formatted, &tracker, config)
+                        } else {
+                            formatted
+                        };
+
+                        let wrapped = rewrap_line(&formatted, config.line_length, config.indent_width);
+                        output_lines.extend(wrapped);
+                        break; // Skip remaining raw lines
                     } else {
-                        // Continuation line: full normalization + proportional re-indent
-                        let formatted = process_continuation_line(trimmed, config, indent_delta);
-                        output_lines.push(formatted);
+                        unreachable!("raw_idx > 0 not reached after break");
                     }
                 }
             }
@@ -485,6 +483,288 @@ fn leading_spaces(s: &str) -> usize {
 /// Uppercase Fortran keywords (inverse of normalize_case).
 fn normalize_case_upper(line: &str) -> String {
     line.to_string()
+}
+
+/// Wrap a long comment line at word boundaries.
+/// Preserves the comment marker style (!, !>, !<, etc.)
+fn wrap_comment(line: &str, max_length: usize, depth: usize, indent_width: usize) -> Vec<String> {
+    if line.len() <= max_length || max_length >= 1000 {
+        return vec![line.to_string()];
+    }
+
+    let indent = leading_spaces(line);
+    let content = line.trim_start();
+
+    // Extract comment marker: !, !>, !<, !* etc.
+    let marker = if content.starts_with("!>") {
+        "!>"
+    } else if content.starts_with("!<") {
+        "!<"
+    } else if content.starts_with("!*") {
+        "!*"
+    } else {
+        "!"
+    };
+
+    // Get the text after the marker (and optional space)
+    let text_start = if content.len() > marker.len() && content.as_bytes()[marker.len()] == b' ' {
+        marker.len() + 1
+    } else {
+        marker.len()
+    };
+    let text = &content[text_start..];
+
+    let prefix = " ".repeat(indent);
+    let line_prefix = format!("{}{} ", prefix, marker);
+    let avail = if max_length > line_prefix.len() {
+        max_length - line_prefix.len()
+    } else {
+        40 // minimum
+    };
+
+    // Split text at word boundaries
+    let words: Vec<&str> = text.split_whitespace().collect();
+    let mut result: Vec<String> = Vec::new();
+    let mut current_line = String::new();
+
+    for word in &words {
+        if current_line.is_empty() {
+            current_line = word.to_string();
+        } else if current_line.len() + 1 + word.len() <= avail {
+            current_line.push(' ');
+            current_line.push_str(word);
+        } else {
+            result.push(format!("{}{}", line_prefix, current_line));
+            current_line = word.to_string();
+        }
+    }
+    if !current_line.is_empty() {
+        result.push(format!("{}{}", line_prefix, current_line));
+    }
+
+    if result.is_empty() {
+        vec![line.to_string()]
+    } else {
+        result
+    }
+}
+
+/// Token-aware line re-wrapping. Breaks a long line at token boundaries,
+/// preferring commas, then operators. Never breaks inside tokens (strings,
+/// numbers, identifiers), preventing issues like splitting `1.e-32`.
+///
+/// Returns a Vec of output lines. If the input fits within `max_length`,
+/// returns it unchanged as a single-element Vec.
+fn rewrap_line(line: &str, max_length: usize, indent_width: usize) -> Vec<String> {
+    if line.len() <= max_length || max_length >= 1000 {
+        return vec![line.to_string()];
+    }
+
+    let indent = leading_spaces(line);
+    let content = line.trim_start();
+
+    // Find token boundaries in the content
+    let breaks = find_token_breaks(content);
+
+    if breaks.is_empty() {
+        return vec![line.to_string()];
+    }
+
+    let cont_indent = indent + indent_width;
+    let cont_prefix = " ".repeat(cont_indent);
+
+    // Available width: max_length minus indent minus " &" suffix
+    let first_avail = max_length.saturating_sub(indent + 2);
+    let cont_avail = max_length.saturating_sub(cont_indent + 4); // "& " prefix + " &" suffix
+
+    let mut result: Vec<String> = Vec::new();
+    let mut pos = 0usize;
+    let mut is_first = true;
+
+    while pos < content.len() {
+        let avail = if is_first { first_avail } else { cont_avail };
+        let remaining = &content[pos..];
+
+        // If remaining fits, emit as final line
+        if remaining.len() <= avail + 2 {
+            if is_first {
+                result.push(format!("{}{}", " ".repeat(indent), remaining));
+            } else {
+                result.push(format!("{}& {}", cont_prefix, remaining));
+            }
+            break;
+        }
+
+        // Find best break point within avail characters
+        let abs_limit = pos + avail;
+        let mut best_break = 0usize; // relative to pos
+
+        // Walk through token breaks, find the last one before the limit
+        // Prefer commas (BreakKind::Comma) over operators
+        let mut last_comma = 0usize;
+        let mut last_other = 0usize;
+
+        for &(bp, kind) in &breaks {
+            if bp <= pos {
+                continue;
+            }
+            let rel = bp - pos;
+            if bp > abs_limit {
+                break;
+            }
+            match kind {
+                BreakKind::Comma => last_comma = rel,
+                _ => last_other = rel,
+            }
+        }
+
+        best_break = if last_comma > 0 {
+            last_comma
+        } else if last_other > 0 {
+            last_other
+        } else {
+            // No break point found — emit as-is (over-length)
+            if is_first {
+                result.push(format!("{}{}", " ".repeat(indent), remaining));
+            } else {
+                result.push(format!("{}& {}", cont_prefix, remaining));
+            }
+            break;
+        };
+
+        let chunk = content[pos..pos + best_break].trim_end();
+        if is_first {
+            result.push(format!("{}{} &", " ".repeat(indent), chunk));
+        } else {
+            result.push(format!("{}& {} &", cont_prefix, chunk));
+        }
+
+        pos += best_break;
+        // Skip leading whitespace on next chunk
+        while pos < content.len() && content.as_bytes()[pos] == b' ' {
+            pos += 1;
+        }
+        is_first = false;
+    }
+
+    if result.is_empty() {
+        vec![line.to_string()]
+    } else {
+        result
+    }
+}
+
+#[derive(Clone, Copy)]
+enum BreakKind {
+    Comma,
+    Operator,
+    CloseParen,
+}
+
+/// Find positions in `content` where it's safe to break the line.
+/// Returns (position_after_break_char, kind) pairs.
+/// Positions are byte offsets where a line break can be inserted.
+fn find_token_breaks(content: &str) -> Vec<(usize, BreakKind)> {
+    let bytes = content.as_bytes();
+    let len = bytes.len();
+    let mut breaks = Vec::new();
+    let mut i = 0;
+    let mut in_string = false;
+    let mut quote_char = b' ';
+    let mut paren_depth = 0i32;
+
+    while i < len {
+        let b = bytes[i];
+
+        // Track strings — never break inside
+        if in_string {
+            if b == quote_char {
+                if i + 1 < len && bytes[i + 1] == quote_char {
+                    i += 2;
+                    continue;
+                }
+                in_string = false;
+            }
+            i += 1;
+            continue;
+        }
+
+        if b == b'\'' || b == b'"' {
+            in_string = true;
+            quote_char = b;
+            i += 1;
+            continue;
+        }
+
+        // Track parens
+        if b == b'(' || b == b'[' {
+            paren_depth += 1;
+        } else if b == b')' || b == b']' {
+            paren_depth -= 1;
+            if paren_depth < 0 {
+                paren_depth = 0;
+            }
+            // Break after close paren at low depth
+            if paren_depth <= 1 {
+                breaks.push((i + 1, BreakKind::CloseParen));
+            }
+        }
+
+        // Comma — best break point (after the comma + space)
+        if b == b',' {
+            // Skip trailing space after comma
+            let mut end = i + 1;
+            if end < len && bytes[end] == b' ' {
+                end += 1;
+            }
+            breaks.push((end, BreakKind::Comma));
+        }
+
+        // Binary operators at low paren depth
+        if paren_depth <= 1 {
+            // Multi-char operators: check for //, /=, ==, <=, >=, =>, **
+            if b == b'/' && i + 1 < len && bytes[i + 1] == b'/' {
+                // // (concat) — break before it if preceded by space
+                if i > 0 && bytes[i - 1] == b' ' {
+                    breaks.push((i, BreakKind::Operator));
+                }
+                i += 2;
+                continue;
+            }
+
+            // + and - as binary operators (not unary, not exponent)
+            if (b == b'+' || b == b'-') && i > 0 {
+                let prev = bytes[i - 1];
+                // Binary if preceded by space, close paren, alphanumeric, or _
+                if prev == b' ' || prev == b')' || prev == b']'
+                    || prev.is_ascii_alphanumeric() || prev == b'_'
+                {
+                    // But not if it's part of exponent notation (e+3, d-5)
+                    if !(i >= 2
+                        && (bytes[i - 1] == b'e'
+                            || bytes[i - 1] == b'E'
+                            || bytes[i - 1] == b'd'
+                            || bytes[i - 1] == b'D')
+                        && bytes[i - 2].is_ascii_digit())
+                    {
+                        // Break before the operator if preceded by space
+                        if prev == b' ' {
+                            breaks.push((i, BreakKind::Operator));
+                        }
+                    }
+                }
+            }
+        }
+
+        // Comment starts — stop
+        if b == b'!' {
+            break;
+        }
+
+        i += 1;
+    }
+
+    breaks
 }
 
 /// Normalize comma spacing inside Fypp '[...]' list arguments.

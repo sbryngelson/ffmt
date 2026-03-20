@@ -85,7 +85,7 @@ impl Default for Config {
     fn default() -> Self {
         Config {
             indent_width: 4,
-            line_length: 1000,
+            line_length: 132,
             keyword_case: KeywordCase::Lower,
             normalize_keywords: true,
             indent_fypp: true,
