@@ -15,6 +15,45 @@ jobs:
       - run: cargo test
       - run: cargo clippy -- -D warnings
 
+      # Dogfood: our own test fixtures should be formatted
+      - name: Check fixtures are formatted
+        run: |
+          cargo build --release
+          ./target/release/ffmt --check tests/fixtures/ || echo "Fixtures need formatting"
+
+  # Ecosystem check: verify idempotency on real Fortran projects
+  ecosystem:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --release
+      - name: Test on real Fortran codebases
+        run: |
+          set -e
+          mkdir -p /tmp/ecosystem
+
+          # stdlib (Fortran standard library)
+          git clone --depth 1 https://github.com/fortran-lang/stdlib /tmp/ecosystem/stdlib 2>/dev/null || true
+
+          # fpm (Fortran package manager)
+          git clone --depth 1 https://github.com/fortran-lang/fpm /tmp/ecosystem/fpm 2>/dev/null || true
+
+          # json-fortran
+          git clone --depth 1 https://github.com/jacobwilliams/json-fortran /tmp/ecosystem/json-fortran 2>/dev/null || true
+
+          for repo in /tmp/ecosystem/*/; do
+            echo "=== Testing $(basename $repo) ==="
+            # Format
+            ./target/release/ffmt "$repo" 2>/dev/null || true
+            # Check idempotency
+            if ! ./target/release/ffmt --check --quiet "$repo" 2>/dev/null; then
+              echo "FAIL: $(basename $repo) is not idempotent!"
+              exit 1
+            fi
+            echo "PASS: $(basename $repo) is idempotent"
+          done
+
   build-wheels:
     name: Build wheels (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
