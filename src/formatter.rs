@@ -154,6 +154,11 @@ pub fn format_with_config(
                         // First line (or single line): full normalization
                         let orig_indent = leading_spaces(trimmed);
                         let mut processed = process_line(trimmed, config);
+                        // For InlineFypp ($:, @:) lines, normalize comma spacing
+                        // inside '[...]' Fypp list arguments.
+                        if kind == LineKind::InlineFypp {
+                            processed = normalize_fypp_lists(&processed);
+                        }
                         // Ensure space before trailing & on continuation lines,
                         // but NOT for Fypp !& continuations
                         if ll.raw_lines.len() > 1 && processed.trim_end().ends_with('&') {
@@ -327,4 +332,71 @@ fn leading_spaces(s: &str) -> usize {
 /// Uppercase Fortran keywords (inverse of normalize_case).
 fn normalize_case_upper(line: &str) -> String {
     line.to_string()
+}
+
+/// Normalize comma spacing inside Fypp '[...]' list arguments.
+/// E.g., `'[x,y,z,Ys_L, Ys_R]'` → `'[x, y, z, Ys_L, Ys_R]'`
+/// Only modifies content inside `'[` ... `]'` patterns.
+fn normalize_fypp_lists(line: &str) -> String {
+    let mut result = String::with_capacity(line.len());
+    let bytes = line.as_bytes();
+    let len = bytes.len();
+    let mut i = 0;
+
+    while i < len {
+        // Look for '[
+        if i + 1 < len && bytes[i] == b'\'' && bytes[i + 1] == b'[' {
+            // Find the matching ]'
+            let start = i;
+            i += 2; // skip '[
+            let mut content = String::new();
+            while i < len {
+                if bytes[i] == b']' && i + 1 < len && bytes[i + 1] == b'\'' {
+                    // Found ]' — normalize commas in content
+                    let normalized_content = normalize_comma_spacing(&content);
+                    result.push_str("'[");
+                    result.push_str(&normalized_content);
+                    result.push_str("]'");
+                    i += 2; // skip ]'
+                    break;
+                }
+                content.push(bytes[i] as char);
+                i += 1;
+            }
+            // If we didn't find ]', emit original
+            if i >= len && !result.ends_with("]'") {
+                result.push_str(&line[start..]);
+            }
+        } else {
+            result.push(bytes[i] as char);
+            i += 1;
+        }
+    }
+
+    result
+}
+
+/// Normalize comma spacing: ensure exactly one space after each comma.
+fn normalize_comma_spacing(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let bytes = s.as_bytes();
+    let len = bytes.len();
+    let mut i = 0;
+
+    while i < len {
+        if bytes[i] == b',' {
+            result.push(',');
+            result.push(' ');
+            // Skip any whitespace after the comma
+            i += 1;
+            while i < len && bytes[i] == b' ' {
+                i += 1;
+            }
+        } else {
+            result.push(bytes[i] as char);
+            i += 1;
+        }
+    }
+
+    result
 }
