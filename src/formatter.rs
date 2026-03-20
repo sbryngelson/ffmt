@@ -304,7 +304,7 @@ pub fn format_with_config(
                         output_lines.push(formatted);
                     } else if ll.raw_lines.len() == 1 {
                         // Single-line: full normalization + rewrap if over limit
-                        let mut processed = process_line(trimmed, config);
+                        let processed = process_line(trimmed, config);
                         let mut formatted =
                             apply_indent(processed.trim(), depth, config.indent_width);
 
@@ -316,7 +316,7 @@ pub fn format_with_config(
                         output_lines.extend(wrapped);
                     } else if raw_idx == 0 {
                         // Multi-line: unravel joined line, normalize, rewrap
-                        let mut processed = process_line(&ll.joined, config);
+                        let processed = process_line(&ll.joined, config);
                         let formatted =
                             apply_indent(processed.trim(), depth, config.indent_width);
 
@@ -501,7 +501,7 @@ fn wrap_comment(line: &str, max_length: usize, _depth: usize, _indent_width: usi
     let split_at_cmds = split_doxygen_commands(line);
     if split_at_cmds.len() > 1 {
         let mut result = Vec::new();
-        for (i, sub) in split_at_cmds.iter().enumerate() {
+        for sub in &split_at_cmds {
             let sub_wrapped = wrap_comment(sub, max_length, _depth, _indent_width);
             result.extend(sub_wrapped);
         }
