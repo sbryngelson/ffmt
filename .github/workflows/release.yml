@@ -63,6 +63,7 @@ jobs:
 
   publish-crates:
     runs-on: ubuntu-latest
+    environment: crates
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
