@@ -1,0 +1,26 @@
+name: "ffmt - Fortran Formatter"
+description: "Run ffmt Fortran formatter"
+branding:
+  icon: "code"
+  color: "blue"
+
+inputs:
+  args:
+    description: "Arguments to pass to ffmt (default: --check src/)"
+    required: false
+    default: "--check src/"
+  version:
+    description: "Version of ffmt to install"
+    required: false
+    default: "latest"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Install ffmt
+      shell: bash
+      run: pip install ffmt${{ inputs.version != 'latest' && format('=={0}', inputs.version) || '' }}
+
+    - name: Run ffmt
+      shell: bash
+      run: ffmt ${{ inputs.args }}

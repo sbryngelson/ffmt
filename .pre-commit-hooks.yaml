@@ -1,0 +1,16 @@
+- id: ffmt
+  name: ffmt
+  description: An opinionated Fortran formatter
+  entry: ffmt
+  language: rust
+  types_or: [fortran]
+  # Also match .fpp files which pre-commit may not know about
+  files: \.(fpp|f90|F90|f95|f03)$
+
+- id: ffmt-check
+  name: ffmt (check only)
+  description: Check Fortran formatting without modifying files
+  entry: ffmt --check
+  language: rust
+  types_or: [fortran]
+  files: \.(fpp|f90|F90|f95|f03)$

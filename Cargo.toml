@@ -1,0 +1,17 @@
+[package]
+name = "ffmt"
+version = "0.1.0"
+edition = "2021"
+description = "A fast, configurable Fortran formatter"
+license = "MIT"
+repository = "https://github.com/sbryngelson/ffmt"
+keywords = ["fortran", "formatter", "linter", "code-quality"]
+categories = ["development-tools", "command-line-utilities"]
+
+[dependencies]
+regex = "1"
+clap = { version = "4", features = ["derive"] }
+rayon = "1"
+ignore = "0.4"
+toml = "0.8"
+serde = { version = "1", features = ["derive"] }
