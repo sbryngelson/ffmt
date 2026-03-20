@@ -205,7 +205,7 @@ pub fn format_with_config(
         // --- Emit each raw line with formatting ---
         // Track the indent delta from the first line so continuation lines
         // can be shifted proportionally.
-        let mut indent_delta: isize = 0;
+        
 
         for (raw_idx, raw_line) in ll.raw_lines.iter().enumerate() {
             let trimmed = raw_line.trim_end();
@@ -369,111 +369,7 @@ fn process_line(line: &str, config: &Config) -> String {
     result
 }
 
-/// Process a continuation line with full normalization and proportional re-indentation.
-///
-/// Continuation lines may start with optional leading whitespace and an optional `&`.
-/// We:
-/// 1. Strip the leading `&` (if present) and note its position
-/// 2. Apply full normalization to the content
-/// 3. Re-indent by applying the same delta that the first line received
-fn process_continuation_line(line: &str, config: &Config, indent_delta: isize) -> String {
-    let orig_indent = leading_spaces(line);
-    let stripped = line.trim_start();
 
-    // Check for leading & (continuation marker)
-    let (has_leading_amp, content) = if let Some(after_amp) = stripped.strip_prefix('&') {
-        (true, after_amp.trim_start())
-    } else {
-        (false, stripped)
-    };
-
-    // Check for trailing & (this line continues further)
-    let (main_content, trailing) = split_trailing_amp(content);
-
-    // Keyword normalization only on continuation lines.
-    // Whitespace normalization is NOT applied because the normalizer
-    // lacks context from the previous line and can't distinguish
-    // binary operators (+ log(...)) from unary (-buff_size:n).
-    let mut normalized = main_content.to_string();
-
-    if config.normalize_keywords {
-        normalized = normalize_keywords(&normalized);
-    }
-
-    match config.keyword_case {
-        KeywordCase::Lower => normalized = normalize_case(&normalized),
-        KeywordCase::Upper => normalized = normalize_case_upper(&normalized),
-        KeywordCase::Preserve => {}
-    }
-
-    let normalized = normalized.trim();
-
-    // Re-add trailing & (preserving any !& Fypp continuation after it)
-    let with_trailing = if trailing.is_empty() {
-        normalized.to_string()
-    } else {
-        let trail = trailing.trim();
-        format!("{} {}", normalized, trail)
-    };
-
-    // Re-add leading & if it was present
-    let with_leading = if has_leading_amp {
-        format!("& {}", with_trailing)
-    } else {
-        with_trailing
-    };
-
-    // Apply proportional re-indentation
-    let new_indent = if indent_delta >= 0 {
-        orig_indent + indent_delta as usize
-    } else {
-        orig_indent.saturating_sub((-indent_delta) as usize)
-    };
-
-    let indent_str = " ".repeat(new_indent);
-    format!("{}{}", indent_str, with_leading)
-}
-
-/// Split a line at its trailing `&` continuation marker (if present).
-/// Returns (content_before_amp, trailing_amp_and_comment).
-/// The `&` must be outside strings and comments.
-fn split_trailing_amp(line: &str) -> (&str, &str) {
-    let bytes = line.as_bytes();
-    let mut in_string = false;
-    let mut quote_char = b' ';
-    let mut last_amp: Option<usize> = None;
-
-    for (i, &b) in bytes.iter().enumerate() {
-        if in_string {
-            if b == quote_char {
-                if i + 1 < bytes.len() && bytes[i + 1] == quote_char {
-                    continue;
-                }
-                in_string = false;
-            }
-            continue;
-        }
-        if b == b'\'' || b == b'"' {
-            in_string = true;
-            quote_char = b;
-            continue;
-        }
-        if b == b'!' {
-            // Comment starts -- stop looking
-            break;
-        }
-        if b == b'&' {
-            last_amp = Some(i);
-        } else if !b.is_ascii_whitespace() {
-            last_amp = None;
-        }
-    }
-
-    match last_amp {
-        Some(pos) => (line[..pos].trim_end(), &line[pos..]),
-        None => (line.trim_end(), ""),
-    }
-}
 
 /// Count leading spaces in a string.
 fn leading_spaces(s: &str) -> usize {
@@ -487,7 +383,7 @@ fn normalize_case_upper(line: &str) -> String {
 
 /// Wrap a long comment line at word boundaries.
 /// Preserves the comment marker style (!, !>, !<, etc.)
-fn wrap_comment(line: &str, max_length: usize, depth: usize, indent_width: usize) -> Vec<String> {
+fn wrap_comment(line: &str, max_length: usize, _depth: usize, _indent_width: usize) -> Vec<String> {
     if line.len() <= max_length || max_length >= 1000 {
         return vec![line.to_string()];
     }
@@ -597,7 +493,7 @@ fn rewrap_line(line: &str, max_length: usize, indent_width: usize) -> Vec<String
 
         // Find best break point within avail characters
         let abs_limit = pos + avail;
-        let mut best_break = 0usize; // relative to pos
+        
 
         // Walk through token breaks, find the last one before the limit
         // Prefer commas (BreakKind::Comma) over operators
@@ -618,7 +514,7 @@ fn rewrap_line(line: &str, max_length: usize, indent_width: usize) -> Vec<String
             }
         }
 
-        best_break = if last_comma > 0 {
+        let best_break = if last_comma > 0 {
             last_comma
         } else if last_other > 0 {
             last_other
