@@ -420,3 +420,123 @@ pub fn classify(line: &str) -> LineKind {
     // 6. Fortran
     classify_fortran(trimmed)
 }
+
+/// Extract the scope name from a Fortran block-opening line.
+///
+/// Examples:
+/// - `subroutine s_foo(...)` -> Some("s_foo")
+/// - `pure subroutine s_bar` -> Some("s_bar")
+/// - `function f_baz(x) result(y)` -> Some("f_baz")
+/// - `module m_rhs` -> Some("m_rhs")
+/// - `program main` -> Some("main")
+/// - `type :: my_type` -> Some("my_type")
+/// - `type, extends(base) :: child` -> Some("child")
+pub fn extract_scope_name(line: &str) -> Option<String> {
+    let trimmed = line.trim();
+    let lower = trimmed.to_ascii_lowercase();
+
+    // subroutine name(...) or subroutine name
+    let re_sub = re!(
+        SCOPE_SUB,
+        r"(?i)(?:(?:pure|elemental|impure|recursive|module)\s+)*subroutine\s+(\w+)"
+    );
+    if let Some(caps) = re_sub.captures(trimmed) {
+        return Some(caps[1].to_string());
+    }
+
+    // function name(...) or function name
+    let re_func = re!(
+        SCOPE_FUNC,
+        r"(?i)(?:(?:pure|elemental|impure|recursive|integer|real|double\s+precision|complex|character|logical|type\s*\([^)]*\))\s+)*function\s+(\w+)"
+    );
+    if let Some(caps) = re_func.captures(trimmed) {
+        return Some(caps[1].to_string());
+    }
+
+    // module name (but not "module procedure")
+    if lower.starts_with("module") {
+        let re_mod = re!(SCOPE_MOD, r"(?i)^module\s+(\w+)");
+        if let Some(caps) = re_mod.captures(trimmed) {
+            let name = &caps[1];
+            if !name.eq_ignore_ascii_case("procedure") {
+                return Some(name.to_string());
+            }
+        }
+    }
+
+    // program name
+    let re_prog = re!(SCOPE_PROG, r"(?i)^program\s+(\w+)");
+    if let Some(caps) = re_prog.captures(trimmed) {
+        return Some(caps[1].to_string());
+    }
+
+    // type [, attrs] :: name  or  type name
+    if lower.starts_with("type") {
+        // type :: name  or  type, extends(...) :: name
+        let re_type_def = re!(SCOPE_TYPE, r"(?i)^type\b[^(]*::\s*(\w+)");
+        if let Some(caps) = re_type_def.captures(trimmed) {
+            return Some(caps[1].to_string());
+        }
+        // type name (no :: but also not type(...) which is usage)
+        let re_type_bare = re!(SCOPE_TYPE_BARE, r"(?i)^type\s+(\w+)\s*$");
+        if let Some(caps) = re_type_bare.captures(trimmed) {
+            let name = &caps[1];
+            // Exclude "type is" which is a continuation
+            if !name.eq_ignore_ascii_case("is") {
+                return Some(name.to_string());
+            }
+        }
+    }
+
+    // submodule(parent) name
+    let re_submod = re!(SCOPE_SUBMOD, r"(?i)^submodule\s*\([^)]*\)\s*(\w+)");
+    if let Some(caps) = re_submod.captures(trimmed) {
+        return Some(caps[1].to_string());
+    }
+
+    None
+}
+
+/// Check if an `end ...` line already has a name after the keyword.
+/// E.g., `end subroutine s_foo` -> true, `end subroutine` -> false.
+pub fn end_statement_has_name(line: &str) -> bool {
+    let trimmed = line.trim();
+    let re_end_with_name = re!(
+        END_WITH_NAME,
+        r"(?i)^end\s+(subroutine|function|module|submodule|program|type)\s+\w+"
+    );
+    re_end_with_name.is_match(trimmed)
+}
+
+/// Extract the block keyword from an `end` statement.
+/// E.g., `end subroutine` -> Some("subroutine"), `end` -> None.
+pub fn end_block_keyword(line: &str) -> Option<&str> {
+    let trimmed = line.trim();
+    let lower_bytes = trimmed.as_bytes();
+
+    // Must start with "end" (case-insensitive)
+    if trimmed.len() < 3 {
+        return None;
+    }
+    let prefix: String = lower_bytes[..3].iter().map(|&b| b.to_ascii_lowercase() as char).collect();
+    if prefix != "end" {
+        return None;
+    }
+
+    let rest = trimmed[3..].trim_start();
+    if rest.is_empty() {
+        return None;
+    }
+
+    // Get the keyword (first word after "end")
+    let keyword_end = rest.find(|c: char| c.is_whitespace() || c == '!').unwrap_or(rest.len());
+    let keyword = &rest[..keyword_end];
+    let keyword_lower: String = keyword.chars().map(|c| c.to_ascii_lowercase()).collect();
+
+    match keyword_lower.as_str() {
+        "subroutine" | "function" | "module" | "submodule" | "program" | "type" => {
+            Some(&rest[..keyword_end])
+        }
+        _ => None,
+    }
+}

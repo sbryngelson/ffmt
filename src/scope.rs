@@ -10,12 +10,20 @@ struct ScopeEntry {
     #[allow(dead_code)]
     kind: ScopeKind,
     depth: usize,
+    /// The name of the scope (e.g., subroutine name, module name).
+    name: Option<String>,
 }
 
 /// Tracks indentation depth based on line classifications.
 pub struct ScopeTracker {
     depth: usize,
     stack: Vec<ScopeEntry>,
+    /// Name of the most recently popped (closed) scope.
+    last_closed_name: Option<String>,
+    /// Whether we are inside a `contains` block (for blank line rules).
+    in_contains: bool,
+    /// Depth of the most recent `contains` scope.
+    contains_depth: Option<usize>,
 }
 
 impl Default for ScopeTracker {
@@ -29,6 +37,9 @@ impl ScopeTracker {
         Self {
             depth: 0,
             stack: Vec::new(),
+            last_closed_name: None,
+            in_contains: false,
+            contains_depth: None,
         }
     }
 
@@ -36,8 +47,26 @@ impl ScopeTracker {
         self.depth
     }
 
+    /// Returns the name of the most recently popped scope, if any.
+    pub fn last_closed_name(&self) -> Option<&str> {
+        self.last_closed_name.as_deref()
+    }
+
+    /// Returns true if we are inside a `contains` block.
+    pub fn in_contains(&self) -> bool {
+        self.in_contains
+    }
+
     /// Process a line kind, update internal state, and return the indent depth for THIS line.
     pub fn process(&mut self, kind: LineKind) -> usize {
+        self.process_with_name(kind, None)
+    }
+
+    /// Process a line kind with an optional scope name for block openers.
+    pub fn process_with_name(&mut self, kind: LineKind, name: Option<String>) -> usize {
+        // Clear last closed name on each new line processing
+        self.last_closed_name = None;
+
         match kind {
             // Block openers: return current depth for this line, then push and increment.
             LineKind::FortranBlockOpen => {
@@ -45,6 +74,7 @@ impl ScopeTracker {
                 self.stack.push(ScopeEntry {
                     kind: ScopeKind::Fortran,
                     depth: line_depth,
+                    name,
                 });
                 self.depth += 1;
                 line_depth
@@ -54,6 +84,7 @@ impl ScopeTracker {
                 self.stack.push(ScopeEntry {
                     kind: ScopeKind::Fypp,
                     depth: line_depth,
+                    name: None,
                 });
                 self.depth += 1;
                 line_depth
@@ -63,6 +94,14 @@ impl ScopeTracker {
             LineKind::FortranBlockClose => {
                 if let Some(entry) = self.stack.pop() {
                     self.depth = entry.depth;
+                    self.last_closed_name = entry.name;
+                    // If we pop back to or below the contains depth, we're no longer in contains
+                    if let Some(cd) = self.contains_depth {
+                        if entry.depth <= cd {
+                            self.in_contains = false;
+                            self.contains_depth = None;
+                        }
+                    }
                     entry.depth
                 } else {
                     eprintln!("ffmt: warning: unmatched FortranBlockClose at depth 0");
@@ -96,6 +135,8 @@ impl ScopeTracker {
             // set depth = enclosing + 1 for subsequent lines.
             LineKind::FortranContains => {
                 if let Some(entry) = self.stack.last() {
+                    self.in_contains = true;
+                    self.contains_depth = Some(entry.depth);
                     // This line is at enclosing depth; subsequent lines stay at enclosing + 1.
                     // Current depth was enclosing + 1, so we keep it (depth remains unchanged).
                     entry.depth
