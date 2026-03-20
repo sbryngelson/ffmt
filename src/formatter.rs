@@ -153,7 +153,15 @@ pub fn format_with_config(
                     if ll.raw_lines.len() == 1 || raw_idx == 0 {
                         // First line (or single line): full normalization
                         let orig_indent = leading_spaces(trimmed);
-                        let processed = process_line(trimmed, config);
+                        let mut processed = process_line(trimmed, config);
+                        // Ensure space before trailing & on continuation lines
+                        if ll.raw_lines.len() > 1 && processed.trim_end().ends_with('&') {
+                            let t = processed.trim_end();
+                            if t.len() >= 2 && t.as_bytes()[t.len() - 2] != b' ' {
+                                let pos = t.len() - 1;
+                                processed = format!("{} &", &t[..pos]);
+                            }
+                        }
                         let formatted =
                             apply_indent(processed.trim(), depth, config.indent_width);
                         let new_indent = leading_spaces(&formatted);
