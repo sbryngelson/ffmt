@@ -19,8 +19,12 @@ const CACHE_DIR: &str = ".ffmt_cache";
 )]
 struct Args {
     /// Files or directories to format. Use `-` for stdin.
-    #[arg(required = true)]
+    #[arg(required_unless_present = "lsp")]
     paths: Vec<String>,
+
+    /// Run as LSP server (for editor integration)
+    #[arg(long)]
+    lsp: bool,
 
     /// Check if files are formatted (exit 1 if not)
     #[arg(long)]
@@ -123,6 +127,13 @@ fn atty_stdout() -> bool {
 
 pub fn run() {
     let args = Args::parse();
+
+    // LSP mode
+    if args.lsp {
+        crate::lsp::run_lsp();
+        return;
+    }
+
     let color = use_color(&args.color);
 
     // Load config from ffmt.toml or pyproject.toml

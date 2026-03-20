@@ -69,11 +69,10 @@ All options have sensible defaults -- most projects need no config file at all.
 
 ## Editor integration
 
-### Vim/Neovim
+ffmt includes a built-in LSP server for real-time format-on-save:
 
-```vim
-autocmd BufWritePost *.fpp,*.f90 silent !ffmt %
-" Or: set formatprg=ffmt\ -
+```bash
+ffmt --lsp
 ```
 
 ### VS Code
@@ -83,6 +82,23 @@ autocmd BufWritePost *.fpp,*.f90 silent !ffmt %
     "fortran.formatting.formatter": "ffmt",
     "fortran.formatting.args": ["--stdin-filepath", "${file}", "-"]
 }
+```
+
+### Vim/Neovim
+
+```vim
+autocmd BufWritePost *.fpp,*.f90 silent !ffmt %
+" Or: set formatprg=ffmt\ -
+```
+
+### Neovim (LSP)
+
+```lua
+vim.lsp.start({
+    name = "ffmt",
+    cmd = { "ffmt", "--lsp" },
+    root_dir = vim.fs.dirname(vim.fs.find({ "ffmt.toml", "pyproject.toml" }, { upward = true })[1]),
+})
 ```
 
 ## CI integration
