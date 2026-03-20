@@ -235,6 +235,11 @@ pub fn format_with_config(
                                 break;
                             }
                             let cont_text = extract_comment_text(next_content, "!!");
+                            // Don't join if continuation starts with @
+                            // (separate Doxygen command) or is blank
+                            if cont_text.starts_with('@') || cont_text.trim().is_empty() {
+                                break;
+                            }
                             full_text.push(' ');
                             full_text.push_str(cont_text);
                             idx += 1;
@@ -243,7 +248,12 @@ pub fn format_with_config(
                         }
 
                         let indent_str = " ".repeat(depth * config.indent_width);
-                        let reconstructed = format!("{}!> {}", indent_str, full_text);
+                        let full_trimmed = full_text.trim();
+                        let reconstructed = if full_trimmed.is_empty() {
+                            format!("{}!>", indent_str)
+                        } else {
+                            format!("{}!> {}", indent_str, full_trimmed)
+                        };
                         let wrapped = wrap_comment(&reconstructed, config.line_length, depth, config.indent_width);
                         output_lines.extend(wrapped);
                     } else {
