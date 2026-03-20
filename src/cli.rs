@@ -61,6 +61,14 @@ struct Args {
     /// Only format lines within this range (START:END, 1-based inclusive)
     #[arg(long)]
     range: Option<String>,
+
+    /// Suppress all output except errors
+    #[arg(long, short = 'q')]
+    quiet: bool,
+
+    /// Show verbose output (files being processed)
+    #[arg(long, short = 'v')]
+    verbose: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -132,9 +140,13 @@ pub fn run() {
         crate::config::Config::find_and_load(&search_dir)
     };
 
+    // quiet wins over verbose if both given
+    let quiet = args.quiet;
+    let verbose = args.verbose && !args.quiet;
+
     // Handle stdin mode
     if args.paths.len() == 1 && args.paths[0] == "-" {
-        run_stdin(&args, color, &config);
+        run_stdin(&args, color, quiet, &config);
         return;
     }
 
@@ -160,7 +172,7 @@ pub fn run() {
         .cache_dir
         .as_deref()
         .unwrap_or(CACHE_DIR);
-    let mut cache = if args.no_cache {
+    let mut cache = if args.no_cache || args.check {
         None
     } else {
         Some(FileCache::load(cache_dir))
@@ -179,8 +191,17 @@ pub fn run() {
     let range = parse_range(&args.range);
     let any_changed = AtomicBool::new(false);
 
+    let opts = ProcessOptions {
+        check: args.check,
+        diff: args.diff,
+        color,
+        range,
+        quiet,
+        verbose,
+    };
+
     files_to_process.par_iter().for_each(|path| {
-        let changed = process_file(path, args.check, args.diff, color, range, &config);
+        let changed = process_file(path, &opts, &config);
         if changed {
             any_changed.store(true, Ordering::Relaxed);
         }
@@ -224,7 +245,7 @@ fn parse_range(range_str: &Option<String>) -> Option<(usize, usize)> {
     Some((start, end))
 }
 
-fn run_stdin(args: &Args, color: bool, config: &crate::config::Config) {
+fn run_stdin(args: &Args, color: bool, quiet: bool, config: &crate::config::Config) {
     let mut source = String::new();
     io::stdin()
         .read_to_string(&mut source)
@@ -239,7 +260,7 @@ fn run_stdin(args: &Args, color: bool, config: &crate::config::Config) {
 
     if args.check || args.diff {
         if formatted != source {
-            if args.check {
+            if args.check && !quiet {
                 println!("{filepath}");
             }
             if args.diff {
@@ -324,34 +345,48 @@ fn is_fortran_file_ext(path: &Path, extensions: &[String]) -> bool {
         .is_some_and(|ext| extensions.iter().any(|e| e == ext))
 }
 
-fn process_file(
-    path: &Path,
+struct ProcessOptions {
     check: bool,
     diff: bool,
     color: bool,
     range: Option<(usize, usize)>,
+    quiet: bool,
+    verbose: bool,
+}
+
+fn process_file(
+    path: &Path,
+    opts: &ProcessOptions,
     config: &crate::config::Config,
 ) -> bool {
     let source = match fs::read_to_string(path) {
         Ok(s) => s,
+        Err(e) if e.kind() == io::ErrorKind::InvalidData => {
+            // Binary or invalid UTF-8: not a text Fortran file, skip silently
+            return false;
+        }
         Err(e) => {
             eprintln!("ffmt: cannot read {}: {e}", path.display());
             return false;
         }
     };
 
-    let formatted = crate::formatter::format_with_config(&source, config, range);
+    if opts.verbose {
+        eprintln!("ffmt: formatting {}", path.display());
+    }
+
+    let formatted = crate::formatter::format_with_config(&source, config, opts.range);
 
     if formatted == source {
         return false;
     }
 
-    if check || diff {
-        if check {
+    if opts.check || opts.diff {
+        if opts.check && !opts.quiet {
             println!("{}", path.display());
         }
-        if diff {
-            print_diff(path, &source, &formatted, color);
+        if opts.diff {
+            print_diff(path, &source, &formatted, opts.color);
         }
         return true;
     }
