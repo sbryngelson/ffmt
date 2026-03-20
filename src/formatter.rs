@@ -289,6 +289,8 @@ pub fn format_with_config(
                         let mut processed = process_line(trimmed, config);
                         if kind == LineKind::InlineFypp {
                             processed = normalize_fypp_lists(&processed);
+                            // Remove space between Fypp macro name and (
+                            processed = remove_fypp_macro_paren_space(&processed);
                         }
                         let mut formatted =
                             apply_indent(processed.trim(), depth, config.indent_width);
@@ -304,6 +306,7 @@ pub fn format_with_config(
                         let mut processed = process_line(&ll.joined, config);
                         if kind == LineKind::InlineFypp {
                             processed = normalize_fypp_lists(&processed);
+                            processed = remove_fypp_macro_paren_space(&processed);
                         }
                         let formatted =
                             apply_indent(processed.trim(), depth, config.indent_width);
@@ -784,6 +787,18 @@ fn find_token_breaks(content: &str) -> Vec<(usize, BreakKind)> {
     }
 
     breaks
+}
+
+/// Remove space between Fypp macro name and ( on $: and @: lines.
+/// E.g., "$:GPU_PARALLEL_LOOP (collapse=3)" -> "$:GPU_PARALLEL_LOOP(collapse=3)"
+fn remove_fypp_macro_paren_space(line: &str) -> String {
+    use regex::Regex;
+    use std::sync::OnceLock;
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| {
+        Regex::new(r"(?m)^(\s*[@$]:[\w]+)\s+\(").unwrap()
+    });
+    re.replace(line, r"${1}(").to_string()
 }
 
 /// Normalize comma spacing inside Fypp '[...]' list arguments.
