@@ -7,7 +7,7 @@ module m_test
 contains
     subroutine s_foo(a, b)
         integer, intent(in) :: a, b
-        if(a == b)then
+        if (a == b)then
             x = a + b
         else
             x = a - b

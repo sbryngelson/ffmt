@@ -60,7 +60,67 @@ pub fn normalize_whitespace(line: &str, ws_config: &WhitespaceConfig) -> String 
     }
 
     let tokens = tokenize(trimmed);
-    render(&tokens, ws_config)
+    let rendered = render(&tokens, ws_config);
+    add_keyword_paren_spaces(&rendered)
+}
+
+/// Add a space between control-flow keywords and `(` where missing.
+/// E.g., `if(x)` → `if (x)`, `call foo(` → `call foo(`  (call already has space)
+fn add_keyword_paren_spaces(line: &str) -> String {
+    use regex::Regex;
+    use std::sync::OnceLock;
+
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| {
+        Regex::new(r"(?i)\b(if|else\s*if|do\s+while|select\s+case|select\s+type|select\s+rank|where|forall|associate|call|write|read|open|close|inquire|allocate|deallocate|nullify)\(").unwrap()
+    });
+
+    // Walk through matches and insert space before (
+    // We need to be careful not to modify content inside strings
+    let bytes = line.as_bytes();
+    let mut result = String::with_capacity(line.len() + 10);
+    let mut last_end = 0;
+    let mut in_string = false;
+    let mut quote_char = b' ';
+
+    // Build a set of positions that are inside strings
+    let mut string_mask = vec![false; bytes.len()];
+    let mut i = 0;
+    while i < bytes.len() {
+        if in_string {
+            string_mask[i] = true;
+            if bytes[i] == quote_char {
+                if i + 1 < bytes.len() && bytes[i + 1] == quote_char {
+                    string_mask[i + 1] = true;
+                    i += 2;
+                    continue;
+                }
+                in_string = false;
+            }
+            i += 1;
+        } else {
+            if bytes[i] == b'\'' || bytes[i] == b'"' {
+                in_string = true;
+                quote_char = bytes[i];
+                string_mask[i] = true;
+            }
+            i += 1;
+        }
+    }
+
+    for m in re.find_iter(line) {
+        let paren_pos = m.end() - 1; // position of the (
+        // Skip if inside a string
+        if string_mask[paren_pos] {
+            continue;
+        }
+        result.push_str(&line[last_end..paren_pos]);
+        result.push(' ');
+        result.push('(');
+        last_end = paren_pos + 1;
+    }
+    result.push_str(&line[last_end..]);
+    result
 }
 
 /// Find the position in `line` of the end of non-space content before position `pos`.
