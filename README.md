@@ -13,10 +13,10 @@ A fast, configurable Fortran formatter. Written in Rust. Installable via `pip`.
 pip install ffmt
 ```
 
-Or from source:
+Or via Cargo:
 
 ```bash
-cargo install --path .
+cargo install ffmt
 ```
 
 ## Usage
