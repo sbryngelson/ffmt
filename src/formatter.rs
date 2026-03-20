@@ -419,6 +419,63 @@ fn normalize_case_upper(line: &str) -> String {
     line.to_string()
 }
 
+/// Split a Doxygen comment line that has multiple @ commands into separate lines.
+/// E.g., `!> @file @brief Foo` → [`!> @file`, `!! @brief Foo`]
+/// Returns the original line as a single-element Vec if no splitting needed.
+fn split_doxygen_commands(line: &str) -> Vec<String> {
+    let trimmed = line.trim_start();
+    if !trimmed.starts_with("!>") && !trimmed.starts_with("!!") {
+        return vec![line.to_string()];
+    }
+
+    let indent = leading_spaces(line);
+    let prefix = " ".repeat(indent);
+    let marker = if trimmed.starts_with("!>") { "!>" } else { "!!" };
+    let text = extract_comment_text(trimmed, marker);
+
+    // Find @ commands in the text (@ followed by a letter)
+    let mut at_positions: Vec<usize> = Vec::new();
+    let bytes = text.as_bytes();
+    for i in 0..bytes.len() {
+        if bytes[i] == b'@' && i + 1 < bytes.len() && bytes[i + 1].is_ascii_alphabetic() {
+            // Don't count the first @ if it's at position 0 (that's the primary command)
+            if i > 0 {
+                at_positions.push(i);
+            }
+        }
+    }
+
+    if at_positions.is_empty() {
+        return vec![line.to_string()];
+    }
+
+    // Split at each @ position
+    let mut result = Vec::new();
+    let mut prev = 0;
+    let cont_marker = if marker == "!>" { "!!" } else { marker };
+
+    for (idx, &pos) in at_positions.iter().enumerate() {
+        let chunk = text[prev..pos].trim();
+        if !chunk.is_empty() {
+            let m = if idx == 0 { marker } else { cont_marker };
+            result.push(format!("{}{} {}", prefix, m, chunk));
+        }
+        prev = pos;
+    }
+    // Last chunk
+    let chunk = text[prev..].trim();
+    if !chunk.is_empty() {
+        let m = if result.is_empty() { marker } else { cont_marker };
+        result.push(format!("{}{} {}", prefix, m, chunk));
+    }
+
+    if result.is_empty() {
+        vec![line.to_string()]
+    } else {
+        result
+    }
+}
+
 /// Extract the text content from a comment line, stripping the marker and leading space.
 fn extract_comment_text<'a>(line: &'a str, marker: &str) -> &'a str {
     let after_marker = &line[marker.len()..];
@@ -428,6 +485,17 @@ fn extract_comment_text<'a>(line: &'a str, marker: &str) -> &'a str {
 /// Wrap a long comment line at word boundaries.
 /// Preserves the comment marker style (!, !>, !<, etc.)
 fn wrap_comment(line: &str, max_length: usize, _depth: usize, _indent_width: usize) -> Vec<String> {
+    // First: if a Doxygen line has multiple @ commands, split them
+    let split_at_cmds = split_doxygen_commands(line);
+    if split_at_cmds.len() > 1 {
+        let mut result = Vec::new();
+        for (i, sub) in split_at_cmds.iter().enumerate() {
+            let sub_wrapped = wrap_comment(sub, max_length, _depth, _indent_width);
+            result.extend(sub_wrapped);
+        }
+        return result;
+    }
+
     if line.len() <= max_length || max_length >= 1000 {
         return vec![line.to_string()];
     }
