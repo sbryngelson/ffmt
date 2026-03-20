@@ -215,11 +215,39 @@ pub fn format_with_config(
                     let content = trimmed.trim_start();
                     let content = normalize_comment_space(content);
                     if content.starts_with("!!") {
-                        // Doxygen continuation: preserve as-is
+                        // Doxygen continuation that wasn't preceded by !> — preserve
                         output_lines.push(trimmed.to_string());
+                    } else if content.starts_with("!>") {
+                        // Doxygen start: collect any following !! continuation lines,
+                        // join the text, and re-wrap as a single block
+                        let marker_text = extract_comment_text(&content, "!>");
+                        let mut full_text = marker_text.to_string();
+
+                        // Look ahead for !! continuation lines
+                        while idx + 1 < ll_count {
+                            let next_ll = &logical_lines[idx + 1];
+                            let next_kind = classify(&next_ll.joined);
+                            if next_kind != LineKind::Comment {
+                                break;
+                            }
+                            let next_content = next_ll.joined.trim().trim_start();
+                            if !next_content.starts_with("!!") {
+                                break;
+                            }
+                            let cont_text = extract_comment_text(next_content, "!!");
+                            full_text.push(' ');
+                            full_text.push_str(cont_text);
+                            idx += 1;
+                            // Process scope for skipped lines
+                            let _ = tracker.process(next_kind);
+                        }
+
+                        let indent_str = " ".repeat(depth * config.indent_width);
+                        let reconstructed = format!("{}!> {}", indent_str, full_text);
+                        let wrapped = wrap_comment(&reconstructed, config.line_length, depth, config.indent_width);
+                        output_lines.extend(wrapped);
                     } else {
                         let indented = apply_indent(&content, depth, config.indent_width);
-                        // Wrap long comments at word boundaries
                         let wrapped = wrap_comment(&indented, config.line_length, depth, config.indent_width);
                         output_lines.extend(wrapped);
                     }
@@ -379,6 +407,12 @@ fn leading_spaces(s: &str) -> usize {
 /// Uppercase Fortran keywords (inverse of normalize_case).
 fn normalize_case_upper(line: &str) -> String {
     line.to_string()
+}
+
+/// Extract the text content from a comment line, stripping the marker and leading space.
+fn extract_comment_text<'a>(line: &'a str, marker: &str) -> &'a str {
+    let after_marker = &line[marker.len()..];
+    after_marker.strip_prefix(' ').unwrap_or(after_marker)
 }
 
 /// Wrap a long comment line at word boundaries.
