@@ -79,6 +79,39 @@ fn strip_leading_amp(line: &str) -> &str {
 }
 
 /// Read source text into logical lines.
+/// Strip trailing `!&` (with optional surrounding whitespace) from a line.
+/// `!&` is a no-op comment used in some codebases to suppress compiler warnings
+/// about line continuations. It carries no semantic meaning and can confuse
+/// compilers like Cray ftn that strictly enforce continuation rules.
+fn strip_trailing_bang_amp(line: &str) -> String {
+    let trimmed = line.trim_end();
+    if !trimmed.ends_with("!&") {
+        return line.to_string();
+    }
+    // Verify that `!&` is a comment, not inside a string.
+    // Find the `!` that starts the `!&` and check it's not in a string.
+    let bang_pos = trimmed.len() - 2;
+    let before = &trimmed[..bang_pos];
+    // Quick check: if `!&` is preceded by something that looks like code or
+    // whitespace (not inside a string), strip it.
+    let mut in_string = false;
+    let mut delim = ' ';
+    for ch in before.chars() {
+        if in_string {
+            if ch == delim { in_string = false; }
+        } else if ch == '\'' || ch == '"' {
+            in_string = true;
+            delim = ch;
+        }
+    }
+    // If we're inside a string at the `!` position, don't strip
+    if in_string {
+        return line.to_string();
+    }
+    // Strip the `!&` — return the line up to and including any content before it
+    before.trim_end().to_string()
+}
+
 pub fn read_logical_lines(source: &str) -> Vec<LogicalLine> {
     // Split into raw lines. We preserve the newline character for raw_lines but
     // work with trimmed content for logic.
@@ -94,8 +127,11 @@ pub fn read_logical_lines(source: &str) -> Vec<LogicalLine> {
     let mut result: Vec<LogicalLine> = Vec::new();
     let mut i = 0usize;
 
+    // Pre-process: strip trailing `!&` from all lines
+    let cleaned: Vec<String> = raw[..raw_count].iter().map(|l| strip_trailing_bang_amp(l)).collect();
+
     while i < raw_count {
-        let raw_line = raw[i];
+        let raw_line = cleaned[i].as_str();
         let line_number = i + 1; // 1-based
 
         // Blank line — always its own LogicalLine
@@ -159,7 +195,7 @@ pub fn read_logical_lines(source: &str) -> Vec<LogicalLine> {
                 break;
             }
 
-            let cont_line = raw[i];
+            let cont_line = cleaned[i].as_str();
 
             // Blank lines are NEVER joined — stop continuation
             if cont_line.trim().is_empty() {
