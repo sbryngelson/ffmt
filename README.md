@@ -44,18 +44,28 @@ Create `ffmt.toml` or add `[tool.ffmt]` to `pyproject.toml`:
 
 ```toml
 indent-width = 4
-keyword-case = "lower"     # lower, upper, preserve
-normalize-keywords = true  # enddo -> end do
+line-length = 132
+keyword-case = "lower"         # lower, upper, preserve
+normalize-keywords = true      # enddo -> end do
+named-ends = true              # end subroutine -> end subroutine s_foo
+align-declarations = true      # align :: in consecutive declarations
+unicode-to-ascii = true        # Greek/math symbols -> LaTeX in comments
+rewrap-comments = true         # wrap long comments at line-length
+rewrap-code = true             # wrap long code lines at line-length
+space-after-comment = true     # !comment -> ! comment
+collapse-double-spaces = true  # x  =  y -> x = y
+keyword-paren-space = true     # if( -> if (
+fypp-list-commas = true        # normalize commas in Fypp '[...]' args
 
 [whitespace]
-relational = true          # ==, /=, <, <=, >, >=
-logical = true             # .and., .or., .not.
-plusminus = true            # binary +, -
-multdiv = false             # *, /
-power = false               # **
-assignment = true           # =
-declaration = true          # ::
-comma = true                # space after comma
+relational = true              # ==, /=, <, <=, >, >=
+logical = true                 # .and., .or., .not.
+plusminus = true                # binary +, -
+multdiv = false                 # *, /
+power = false                   # **
+assignment = true               # =
+declaration = true              # ::
+comma = true                    # space after comma
 ```
 
 All options have sensible defaults -- most projects need no config file at all.

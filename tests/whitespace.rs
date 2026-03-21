@@ -1,8 +1,16 @@
 use ffmt::config::WhitespaceConfig;
-use ffmt::whitespace::normalize_whitespace as normalize_whitespace_with_config;
+use ffmt::whitespace::{
+    normalize_whitespace as normalize_whitespace_raw,
+    add_keyword_paren_spaces,
+    normalize_intent_paren,
+    collapse_double_spaces,
+};
 
 fn normalize_whitespace(line: &str) -> String {
-    normalize_whitespace_with_config(line, &WhitespaceConfig::default())
+    let ws = normalize_whitespace_raw(line, &WhitespaceConfig::default());
+    let kw = add_keyword_paren_spaces(&ws);
+    let intent = normalize_intent_paren(&kw);
+    collapse_double_spaces(&intent)
 }
 
 // --- Relational operators ---

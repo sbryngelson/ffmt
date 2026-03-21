@@ -213,11 +213,11 @@ pub fn format_with_config(
             match kind {
                 LineKind::Comment => {
                     let content = trimmed.trim_start();
-                    let content = crate::unicode::replace_unicode(content);
-                    let content = normalize_comment_space(&content);
+                    let content = if config.unicode_to_ascii { crate::unicode::replace_unicode(content) } else { content.to_string() };
+                    let content = if config.space_after_comment { normalize_comment_space(&content) } else { content };
                     if content.starts_with("!!") {
                         // Doxygen continuation that wasn't preceded by !>
-                        let replaced = crate::unicode::replace_unicode(trimmed);
+                        let replaced = if config.unicode_to_ascii { crate::unicode::replace_unicode(trimmed) } else { trimmed.to_string() };
                         output_lines.push(replaced);
                     } else if content.starts_with("!>") {
                         // Doxygen start: collect any following !! continuation lines,
@@ -256,11 +256,11 @@ pub fn format_with_config(
                         } else {
                             format!("{}!> {}", indent_str, full_trimmed)
                         };
-                        let wrapped = wrap_comment(&reconstructed, config.line_length, depth, config.indent_width);
+                        let wrapped = if config.rewrap_comments { wrap_comment(&reconstructed, config.line_length, depth, config.indent_width) } else { vec![reconstructed.clone()] };
                         output_lines.extend(wrapped);
                     } else {
                         let indented = apply_indent(&content, depth, config.indent_width);
-                        let wrapped = wrap_comment(&indented, config.line_length, depth, config.indent_width);
+                        let wrapped = if config.rewrap_comments { wrap_comment(&indented, config.line_length, depth, config.indent_width) } else { vec![indented.clone()] };
                         output_lines.extend(wrapped);
                     }
                 }
@@ -300,7 +300,7 @@ pub fn format_with_config(
                             KeywordCase::Upper => processed = normalize_case_upper(&processed),
                             KeywordCase::Preserve => {}
                         }
-                        processed = normalize_fypp_lists(&processed);
+                        if config.fypp_list_commas { processed = normalize_fypp_lists(&processed); }
                         processed = remove_fypp_macro_paren_space(&processed);
                         let formatted = apply_indent(processed.trim(), depth, config.indent_width);
                         output_lines.push(formatted);
@@ -310,11 +310,11 @@ pub fn format_with_config(
                         let mut formatted =
                             apply_indent(processed.trim(), depth, config.indent_width);
 
-                        if kind == LineKind::FortranBlockClose {
+                        if kind == LineKind::FortranBlockClose && config.named_ends {
                             formatted = maybe_add_end_name(&formatted, &tracker, config);
                         }
 
-                        let wrapped = rewrap_line(&formatted, config.line_length, config.indent_width);
+                        let wrapped = if config.rewrap_code { rewrap_line(&formatted, config.line_length, config.indent_width) } else { vec![formatted.clone()] };
                         output_lines.extend(wrapped);
                     } else if raw_idx == 0 {
                         // Multi-line: unravel joined line, normalize, rewrap
@@ -322,13 +322,13 @@ pub fn format_with_config(
                         let formatted =
                             apply_indent(processed.trim(), depth, config.indent_width);
 
-                        let formatted = if kind == LineKind::FortranBlockClose {
+                        let formatted = if kind == LineKind::FortranBlockClose && config.named_ends {
                             maybe_add_end_name(&formatted, &tracker, config)
                         } else {
                             formatted
                         };
 
-                        let wrapped = rewrap_line(&formatted, config.line_length, config.indent_width);
+                        let wrapped = if config.rewrap_code { rewrap_line(&formatted, config.line_length, config.indent_width) } else { vec![formatted.clone()] };
                         output_lines.extend(wrapped);
                         break; // Skip remaining raw lines
                     } else {
@@ -356,7 +356,7 @@ pub fn format_with_config(
     }
 
     // Align :: in consecutive declaration lines
-    output_lines = crate::align::align_declarations(&output_lines);
+    if config.align_declarations { output_lines = crate::align::align_declarations(&output_lines); }
 
     let mut result = output_lines.join("\n");
     if !result.is_empty() && !result.ends_with('\n') {
@@ -411,6 +411,14 @@ fn process_line(line: &str, config: &Config) -> String {
     }
 
     result = normalize_whitespace(&result, &config.whitespace);
+
+    if config.keyword_paren_space {
+        result = crate::whitespace::add_keyword_paren_spaces(&result);
+    }
+    result = crate::whitespace::normalize_intent_paren(&result);
+    if config.collapse_double_spaces {
+        result = crate::whitespace::collapse_double_spaces(&result);
+    }
 
     match config.keyword_case {
         KeywordCase::Lower => result = normalize_case(&result),

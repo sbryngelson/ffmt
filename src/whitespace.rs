@@ -60,15 +60,12 @@ pub fn normalize_whitespace(line: &str, ws_config: &WhitespaceConfig) -> String 
     }
 
     let tokens = tokenize(trimmed);
-    let rendered = render(&tokens, ws_config);
-    let with_keywords = add_keyword_paren_spaces(&rendered);
-    let with_intent = normalize_intent_paren(&with_keywords);
-    collapse_double_spaces(&with_intent)
+    render(&tokens, ws_config)
 }
 
 /// Add a space between control-flow keywords and `(` where missing.
 /// E.g., `if(x)` → `if (x)`, `call foo(` → `call foo(`  (call already has space)
-fn add_keyword_paren_spaces(line: &str) -> String {
+pub fn add_keyword_paren_spaces(line: &str) -> String {
     use regex::Regex;
     use std::sync::OnceLock;
 
@@ -192,7 +189,7 @@ fn normalize_comment_bang(comment: &str) -> String {
 }
 
 /// Remove space between `intent` and `(` — convention is `intent(in)` not `intent (in)`.
-fn normalize_intent_paren(line: &str) -> String {
+pub fn normalize_intent_paren(line: &str) -> String {
     use regex::Regex;
     use std::sync::OnceLock;
 
@@ -215,7 +212,7 @@ fn normalize_intent_paren(line: &str) -> String {
 }
 
 /// Collapse runs of 2+ spaces to a single space outside of strings and comments.
-fn collapse_double_spaces(line: &str) -> String {
+pub fn collapse_double_spaces(line: &str) -> String {
     let bytes = line.as_bytes();
     let len = bytes.len();
     let mut result = String::with_capacity(len);

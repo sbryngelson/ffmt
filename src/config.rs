@@ -27,6 +27,33 @@ pub struct Config {
     /// Indent body of module/program.
     #[serde(rename = "indent-module")]
     pub indent_module: bool,
+    /// Add procedure/module name to bare end statements.
+    #[serde(rename = "named-ends")]
+    pub named_ends: bool,
+    /// Align :: in consecutive declaration blocks.
+    #[serde(rename = "align-declarations")]
+    pub align_declarations: bool,
+    /// Replace Unicode Greek/math symbols with LaTeX in comments.
+    #[serde(rename = "unicode-to-ascii")]
+    pub unicode_to_ascii: bool,
+    /// Re-wrap long comments at line-length.
+    #[serde(rename = "rewrap-comments")]
+    pub rewrap_comments: bool,
+    /// Re-wrap long code lines at line-length.
+    #[serde(rename = "rewrap-code")]
+    pub rewrap_code: bool,
+    /// Ensure space after ! in regular comments.
+    #[serde(rename = "space-after-comment")]
+    pub space_after_comment: bool,
+    /// Collapse double spaces to single in code regions.
+    #[serde(rename = "collapse-double-spaces")]
+    pub collapse_double_spaces: bool,
+    /// Add space between keywords and ( (if, call, allocate, etc.).
+    #[serde(rename = "keyword-paren-space")]
+    pub keyword_paren_space: bool,
+    /// Normalize comma spacing in Fypp '[...]' list arguments.
+    #[serde(rename = "fypp-list-commas")]
+    pub fypp_list_commas: bool,
     /// Whitespace rules.
     pub whitespace: WhitespaceConfig,
     /// File handling.
@@ -90,6 +117,15 @@ impl Default for Config {
             normalize_keywords: true,
             indent_fypp: true,
             indent_module: true,
+            named_ends: true,
+            align_declarations: true,
+            unicode_to_ascii: true,
+            rewrap_comments: true,
+            rewrap_code: true,
+            space_after_comment: true,
+            collapse_double_spaces: true,
+            keyword_paren_space: true,
+            fypp_list_commas: true,
             whitespace: WhitespaceConfig::default(),
             files: FilesConfig::default(),
         }
