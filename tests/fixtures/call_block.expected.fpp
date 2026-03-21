@@ -5,4 +5,5 @@ subroutine s_test()
             x(i) = y(i)
         end do
     #:endcall GPU_HOST_DATA
+
 end subroutine s_test

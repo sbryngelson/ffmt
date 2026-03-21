@@ -7,6 +7,7 @@ module m_test
 contains
     subroutine s_foo(a, b)
         integer, intent(in) :: a, b
+
         if (a == b)then
             x = a + b
         else
@@ -15,6 +16,7 @@ contains
         do i = 1, n
             y = y + x
         end do
+
     end subroutine s_foo
 
 end module m_test

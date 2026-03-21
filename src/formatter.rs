@@ -251,7 +251,8 @@ pub fn format_with_config(
                         }
 
                         let indent_str = " ".repeat(depth * config.indent_width);
-                        let full_trimmed = full_text.trim();
+                        // Normalize internal whitespace (collapse multiple spaces)
+                        let full_trimmed: String = full_text.split_whitespace().collect::<Vec<&str>>().join(" ");
                         let reconstructed = if full_trimmed.is_empty() {
                             format!("{}!>", indent_str)
                         } else {
@@ -412,6 +413,14 @@ pub fn format_with_config(
 
     // Ensure blank lines after major block closers (before Doxygen, before end module, etc.)
     output_lines = ensure_blank_after_end(&output_lines);
+
+    // Ensure blank line between declaration block and executable code
+    output_lines = separate_declarations_from_code(&output_lines);
+
+    // Join consecutive short ! comment lines that fit on one line
+    if config.rewrap_comments {
+        output_lines = join_short_comments(&output_lines, config.line_length);
+    }
 
     // Re-wrap !< inline Doxygen comments with !! continuations (before compaction/alignment)
     if config.rewrap_comments {
@@ -778,7 +787,8 @@ fn rewrap_inline_doxygen(lines: &[String], max_length: usize) -> Vec<String> {
             }
         }
 
-        let full_text = full_text.trim();
+        // Normalize internal whitespace (collapse multiple spaces)
+        let full_text: String = full_text.split_whitespace().collect::<Vec<&str>>().join(" ");
 
         // Try to fit the full comment on the declaration line
         if full_text.is_empty() {
@@ -895,8 +905,10 @@ fn remove_blanks_before_closers(lines: &[String]) -> Vec<String> {
             || trimmed.starts_with("#else")
             || is_doxygen_closer;
 
-        // Remove blank lines before closers
-        if is_closer {
+        // Remove blank lines before closers (but not before end subroutine/function —
+        // those get a blank line for visual separation)
+        let is_proc_end = trimmed.starts_with("end subroutine") || trimmed.starts_with("end function");
+        if is_closer && !is_proc_end {
             while result.last().is_some_and(|l| l.trim().is_empty()) {
                 result.pop();
             }
@@ -961,6 +973,7 @@ fn is_end_enclosing_block(line: &str) -> bool {
 /// Ensure blank lines after major block closers where needed:
 /// 1. Between major block closers and `!>` Doxygen block comments
 /// 2. Between `end subroutine`/`end function` and `end module`/`end program`
+/// 3. Before `end subroutine`/`end function` (visual separation of procedure body)
 fn ensure_blank_after_end(lines: &[String]) -> Vec<String> {
     let mut result: Vec<String> = Vec::with_capacity(lines.len());
 
@@ -971,11 +984,171 @@ fn ensure_blank_after_end(lines: &[String]) -> Vec<String> {
                 // !> after a major end block
                 (trimmed.starts_with("!>") && is_major_end_block(prev))
                 // end module/program after end subroutine/function
-                || (is_end_enclosing_block(line) && is_end_procedure_line(prev));
+                || (is_end_enclosing_block(line) && is_end_procedure_line(prev))
+                // blank line before end subroutine/function
+                || is_end_procedure_line(line);
             if needs_blank {
                 result.push(String::new());
             }
         }
+        result.push(line.clone());
+    }
+
+    result
+}
+
+/// Join consecutive `!` comment lines at the same indent when they fit on one line.
+/// Does not join Doxygen (`!>`, `!!`, `!<`) or directive (`!$`) comments.
+fn join_short_comments(lines: &[String], max_length: usize) -> Vec<String> {
+    let mut result: Vec<String> = Vec::new();
+    let mut i = 0;
+
+    while i < lines.len() {
+        let line = &lines[i];
+        let trimmed = line.trim_start();
+
+        // Only join plain `! ` comments (not `!>`, `!!`, `!<`, `!$`, `!*`, `!@`)
+        if trimmed.starts_with("! ") && !trimmed.starts_with("!> ") && !trimmed.starts_with("!! ")
+            && !trimmed.starts_with("!< ") && !trimmed.starts_with("!$ ") && !trimmed.starts_with("!* ")
+            && !trimmed.starts_with("!@ ")
+        {
+            let indent = leading_spaces(line);
+            let mut text = trimmed[2..].to_string(); // text after "! "
+            let mut j = i + 1;
+
+            // Collect consecutive plain comment lines at the same indent
+            while j < lines.len() {
+                let next = &lines[j];
+                let next_trimmed = next.trim_start();
+                let next_indent = leading_spaces(next);
+                if next_indent == indent && next_trimmed.starts_with("! ")
+                    && !next_trimmed.starts_with("!> ") && !next_trimmed.starts_with("!! ")
+                    && !next_trimmed.starts_with("!< ") && !next_trimmed.starts_with("!$ ")
+                    && !next_trimmed.starts_with("!* ") && !next_trimmed.starts_with("!@ ")
+                {
+                    let next_text = &next_trimmed[2..];
+                    // Check if joining would fit
+                    let joined_len = indent + 2 + text.len() + 1 + next_text.len();
+                    if joined_len <= max_length {
+                        text.push(' ');
+                        text.push_str(next_text);
+                        j += 1;
+                    } else {
+                        break;
+                    }
+                } else {
+                    break;
+                }
+            }
+
+            result.push(format!("{}! {}", " ".repeat(indent), text));
+            i = j;
+        } else {
+            result.push(line.clone());
+            i += 1;
+        }
+    }
+
+    result
+}
+
+/// Check if a line is a Fortran declaration (has `::` outside strings/comments,
+/// or is `implicit none`, `use`, etc.).
+fn is_declaration_line(line: &str) -> bool {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+
+    // implicit none, use statements
+    if lower.starts_with("implicit ") || lower.starts_with("use ") || lower == "use" {
+        return true;
+    }
+
+    // Lines with :: outside strings and comments
+    let bytes = trimmed.as_bytes();
+    let mut in_string = false;
+    let mut quote_char = b' ';
+    for i in 0..bytes.len() {
+        if in_string {
+            if bytes[i] == quote_char {
+                if i + 1 < bytes.len() && bytes[i + 1] == quote_char {
+                    continue;
+                }
+                in_string = false;
+            }
+            continue;
+        }
+        if bytes[i] == b'\'' || bytes[i] == b'"' {
+            in_string = true;
+            quote_char = bytes[i];
+            continue;
+        }
+        if bytes[i] == b'!' {
+            break; // rest is comment
+        }
+        if bytes[i] == b':' && i + 1 < bytes.len() && bytes[i + 1] == b':' {
+            return true;
+        }
+    }
+    false
+}
+
+/// Ensure a blank line between the last declaration and the first executable statement
+/// within procedure bodies. Only acts when there is no blank line already.
+fn separate_declarations_from_code(lines: &[String]) -> Vec<String> {
+    let mut result: Vec<String> = Vec::with_capacity(lines.len());
+    // Track whether we're in a declaration region at the top of a procedure
+    let mut in_decl_region = false;
+    let mut saw_declaration = false;
+
+    for line in lines {
+        let trimmed = line.trim();
+        let lower = trimmed.to_ascii_lowercase();
+
+        // Detect procedure entry (subroutine/function opening)
+        if !trimmed.is_empty() && !lower.starts_with("end ") {
+            let is_proc_start = {
+                let re = regex::Regex::new(
+                    r"(?i)^(?:(?:pure|elemental|impure|recursive|module|integer|real|double\s+precision|complex|character|logical|type\s*\([^)]*\))\s+)*(subroutine|function)\b"
+                ).unwrap();
+                re.is_match(&lower)
+            };
+            if is_proc_start {
+                in_decl_region = true;
+                saw_declaration = false;
+                result.push(line.clone());
+                continue;
+            }
+        }
+
+        if in_decl_region {
+            // Skip blank lines and comments — they don't end the declaration region
+            if trimmed.is_empty() || trimmed.starts_with('!') || trimmed.starts_with('#')
+                || trimmed.starts_with("@:") || trimmed.starts_with("$:") {
+                result.push(line.clone());
+                continue;
+            }
+
+            if is_declaration_line(line) {
+                saw_declaration = true;
+                result.push(line.clone());
+                continue;
+            }
+
+            // First non-declaration, non-blank, non-comment line: end decl region
+            in_decl_region = false;
+
+            // Only insert blank if we actually saw declarations
+            if saw_declaration {
+                let has_blank = result.last().is_some_and(|l| l.trim().is_empty());
+                if !has_blank {
+                    result.push(String::new());
+                }
+            }
+        }
+
         result.push(line.clone());
     }
 

@@ -22,6 +22,7 @@ contains
                 end do
             end do
         #:endif
+
     end subroutine s_test
 
 end module m_fypp_test
