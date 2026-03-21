@@ -864,6 +864,12 @@ fn remove_blanks_before_closers(lines: &[String]) -> Vec<String> {
 
     for line in lines {
         let trimmed = line.trim().to_ascii_lowercase();
+        let trimmed_raw = line.trim();
+
+        // Doxygen group closer: !> @}
+        let is_doxygen_closer = trimmed_raw == "!> @}";
+        // Doxygen group opener: !> @{
+        let is_doxygen_opener = trimmed_raw == "!> @{";
 
         let is_closer = trimmed.starts_with("else")
             || trimmed.starts_with("end ")
@@ -886,7 +892,8 @@ fn remove_blanks_before_closers(lines: &[String]) -> Vec<String> {
             || trimmed.starts_with("#:endblock")
             || trimmed.starts_with("#:endmute")
             || trimmed.starts_with("#endif")
-            || trimmed.starts_with("#else");
+            || trimmed.starts_with("#else")
+            || is_doxygen_closer;
 
         // Remove blank lines before closers
         if is_closer {
@@ -918,7 +925,8 @@ fn remove_blanks_before_closers(lines: &[String]) -> Vec<String> {
             || trimmed.starts_with("#:if ")
             || trimmed.starts_with("#:for ")
             || trimmed.starts_with("#:call ")
-            || trimmed.starts_with("#:def "));
+            || trimmed.starts_with("#:def ")
+            || is_doxygen_opener);
 
         prev_was_opener = is_opener;
 
