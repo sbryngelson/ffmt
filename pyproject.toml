@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "ffmt"
-version = "0.2.2"
+version = "0.2.3"
 description = "A fast, configurable Fortran formatter with Fypp, Doxygen, and OpenACC/OpenMP support"
 license = { text = "MIT" }
 requires-python = ">=3.8"
