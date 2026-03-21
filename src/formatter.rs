@@ -742,6 +742,27 @@ fn rewrap_inline_doxygen(lines: &[String], max_length: usize) -> Vec<String> {
 
         // Extract the code part (before !<) and comment text (after !<)
         let code_part = line[..doxygen_pos].trim_end();
+
+        // If there's no code before !<, this is a standalone !< comment (not inline).
+        // Convert it to a !> comment with proper indentation.
+        if code_part.is_empty() {
+            let indent = leading_spaces(line);
+            let comment_part = &line[doxygen_pos..];
+            let text = if comment_part.len() > 2 {
+                let after = &comment_part[2..];
+                if after.starts_with(' ') { &after[1..] } else { after }
+            } else {
+                ""
+            };
+            if text.trim().is_empty() {
+                // Bare standalone !< with no text — drop it
+            } else {
+                result.push(format!("{}!> {}", " ".repeat(indent), text.trim()));
+            }
+            i += 1;
+            continue;
+        }
+
         let comment_part = &line[doxygen_pos..]; // "!< text..."
         let comment_text = if comment_part.len() > 2 {
             let after_marker = &comment_part[2..]; // after "!<"
