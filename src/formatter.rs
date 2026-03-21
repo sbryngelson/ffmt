@@ -426,7 +426,6 @@ pub fn format_with_config(
     if config.rewrap_comments {
         output_lines = rewrap_inline_doxygen(&output_lines, config.line_length);
     }
-
     // Compact use statements (after !< rewrap, since rewrap may consume !! lines)
     if config.compact_use {
         output_lines = compact_use_statements(&output_lines);
@@ -756,9 +755,14 @@ fn rewrap_inline_doxygen(lines: &[String], max_length: usize) -> Vec<String> {
         let indent = leading_spaces(line);
         let mut j = i + 1;
 
-        // Skip blank lines between !< and !! continuations
-        while j < lines.len() && lines[j].trim().is_empty() {
-            j += 1;
+        // Skip blank lines between !< and !! continuations, but only if
+        // there actually are !! continuations after them
+        let mut peek = j;
+        while peek < lines.len() && lines[peek].trim().is_empty() {
+            peek += 1;
+        }
+        if peek < lines.len() && lines[peek].trim_start().starts_with("!!") && !lines[peek].trim_start().starts_with("!!>") {
+            j = peek; // skip blanks, there are !! continuations
         }
 
         while j < lines.len() {
@@ -780,8 +784,17 @@ fn rewrap_inline_doxygen(lines: &[String], max_length: usize) -> Vec<String> {
                 full_text.push_str(cont_trimmed);
                 j += 1;
             } else if next.is_empty() {
-                // Skip blank lines between !! continuation lines
-                j += 1;
+                // Skip blank lines between !! continuation lines,
+                // but only if there's a !! continuation after them
+                let mut peek2 = j + 1;
+                while peek2 < lines.len() && lines[peek2].trim().is_empty() {
+                    peek2 += 1;
+                }
+                if peek2 < lines.len() && lines[peek2].trim_start().starts_with("!!") && !lines[peek2].trim_start().starts_with("!!>") {
+                    j += 1;
+                } else {
+                    break;
+                }
             } else {
                 break;
             }
@@ -1007,28 +1020,39 @@ fn join_short_comments(lines: &[String], max_length: usize) -> Vec<String> {
         let line = &lines[i];
         let trimmed = line.trim_start();
 
-        // Only join plain `! ` comments (not `!>`, `!!`, `!<`, `!$`, `!*`, `!@`)
-        if trimmed.starts_with("! ") && !trimmed.starts_with("!> ") && !trimmed.starts_with("!! ")
-            && !trimmed.starts_with("!< ") && !trimmed.starts_with("!$ ") && !trimmed.starts_with("!* ")
-            && !trimmed.starts_with("!@ ")
+        // Detect which comment marker this line uses
+        let marker = if trimmed.starts_with("!! ") && !trimmed.starts_with("!!>") {
+            // Don't join !! lines that start with @ (Doxygen commands)
+            let text_after = &trimmed[3..];
+            if text_after.starts_with('@') { None } else { Some("!!") }
+        } else if trimmed.starts_with("! ") && !trimmed.starts_with("!> ")
+            && !trimmed.starts_with("!< ") && !trimmed.starts_with("!$ ")
+            && !trimmed.starts_with("!* ") && !trimmed.starts_with("!@ ")
         {
+            Some("!")
+        } else {
+            None
+        };
+
+        if let Some(mk) = marker {
+            let mk_len = mk.len(); // 1 for "!", 2 for "!!"
             let indent = leading_spaces(line);
-            let mut text = trimmed[2..].to_string(); // text after "! "
+            let mut text = trimmed[mk_len + 1..].to_string(); // text after marker + space
             let mut j = i + 1;
 
-            // Collect consecutive plain comment lines at the same indent
+            // Collect consecutive comment lines with the same marker and indent
             while j < lines.len() {
                 let next = &lines[j];
                 let next_trimmed = next.trim_start();
                 let next_indent = leading_spaces(next);
-                if next_indent == indent && next_trimmed.starts_with("! ")
-                    && !next_trimmed.starts_with("!> ") && !next_trimmed.starts_with("!! ")
-                    && !next_trimmed.starts_with("!< ") && !next_trimmed.starts_with("!$ ")
-                    && !next_trimmed.starts_with("!* ") && !next_trimmed.starts_with("!@ ")
-                {
-                    let next_text = &next_trimmed[2..];
-                    // Check if joining would fit
-                    let joined_len = indent + 2 + text.len() + 1 + next_text.len();
+                let next_matches = next_indent == indent && next_trimmed.starts_with(mk)
+                    && next_trimmed.len() > mk_len && next_trimmed.as_bytes()[mk_len] == b' ';
+                // For !!, don't join lines starting with @ (Doxygen commands)
+                let next_matches = next_matches && !(mk == "!!" && next_trimmed[mk_len + 1..].starts_with('@'));
+
+                if next_matches {
+                    let next_text = &next_trimmed[mk_len + 1..];
+                    let joined_len = indent + mk_len + 1 + text.len() + 1 + next_text.len();
                     if joined_len <= max_length {
                         text.push(' ');
                         text.push_str(next_text);
@@ -1041,7 +1065,7 @@ fn join_short_comments(lines: &[String], max_length: usize) -> Vec<String> {
                 }
             }
 
-            result.push(format!("{}! {}", " ".repeat(indent), text));
+            result.push(format!("{}{} {}", " ".repeat(indent), mk, text));
             i = j;
         } else {
             result.push(line.clone());
@@ -1139,7 +1163,6 @@ fn separate_declarations_from_code(lines: &[String]) -> Vec<String> {
 
             // First non-declaration, non-blank, non-comment line: end decl region
             in_decl_region = false;
-
             // Only insert blank if we actually saw declarations
             if saw_declaration {
                 let has_blank = result.last().is_some_and(|l| l.trim().is_empty());

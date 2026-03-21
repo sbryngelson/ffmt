@@ -335,7 +335,52 @@ pub fn align_declarations(lines: &[String], compact: bool, align_comments: bool,
         i = group_end;
     }
 
-    // Remove consecutive duplicate blank lines that may have been created
+    // Align !< comments on consecutive use statement groups
+    if align_comments {
+        result = align_use_comments(&result, line_length);
+    }
+
+    result
+}
+
+/// Check if a line is a `use` statement.
+fn is_use_line(trimmed: &str) -> bool {
+    let lower = trimmed.to_ascii_lowercase();
+    lower.starts_with("use ") || lower == "use"
+}
+
+/// Align `!<` inline comments on consecutive `use` statement groups.
+fn align_use_comments(lines: &[String], line_length: usize) -> Vec<String> {
+    let mut result = lines.to_vec();
+    let mut i = 0;
+
+    while i < result.len() {
+        let trimmed = result[i].trim_start();
+        if !is_use_line(trimmed) {
+            i += 1;
+            continue;
+        }
+
+        let group_indent = indent_of(&result[i]);
+        let group_start = i;
+        let mut group_end = i;
+
+        // Collect consecutive use statements at the same indent
+        while group_end < result.len() {
+            let t = result[group_end].trim_start();
+            if t.is_empty() || !is_use_line(t) || indent_of(&result[group_end]) != group_indent {
+                break;
+            }
+            group_end += 1;
+        }
+
+        if group_end - group_start >= 2 {
+            align_inline_comments(&mut result[group_start..group_end], line_length);
+        }
+
+        i = group_end;
+    }
+
     result
 }
 
