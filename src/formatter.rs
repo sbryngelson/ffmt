@@ -1213,15 +1213,26 @@ fn separate_declarations_from_code(lines: &[String]) -> Vec<String> {
         }
 
         if in_decl_region {
-            // Skip blank lines, comments, preprocessor, and continuation lines
-            if trimmed.is_empty() || trimmed.starts_with('!') || trimmed.starts_with('#')
+            // Skip blank lines, comments, and continuation lines
+            // (preprocessor #ifdef/#ifndef/#if end the declaration region below)
+            if trimmed.is_empty() || trimmed.starts_with('!')
                 || trimmed.starts_with('&') {
                 result.push(line.clone());
                 continue;
             }
 
-            // Fypp lines ($:, @:) are executable — end the declaration region
-            if trimmed.starts_with("@:") || trimmed.starts_with("$:") {
+            // Preprocessor #endif/#else/#include/#define — skip without ending region
+            if trimmed.starts_with("#endif") || trimmed.starts_with("#else")
+                || trimmed.starts_with("#elif") || trimmed.starts_with("#include")
+                || trimmed.starts_with("#define") || trimmed.starts_with("#undef") {
+                result.push(line.clone());
+                continue;
+            }
+
+            // Fypp lines ($:, @:) and #ifdef/#ifndef/#if — end the declaration region
+            if trimmed.starts_with("@:") || trimmed.starts_with("$:")
+                || trimmed.starts_with("#ifdef") || trimmed.starts_with("#ifndef")
+                || trimmed.starts_with("#if ") {
                 in_decl_region = false;
                 if saw_declaration {
                     let has_blank = result.last().is_some_and(|l| l.trim().is_empty());

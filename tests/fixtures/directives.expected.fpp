@@ -1,9 +1,9 @@
 subroutine s_test()
 
     integer :: i, j, k
+
 #if defined(MFC_OpenACC)
     !$acc parallel loop collapse(3)
-
     do k = 0, p
         do j = 0, n
             do i = 0, m
