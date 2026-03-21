@@ -1,6 +1,6 @@
 [package]
 name = "ffmt"
-version = "0.2.5"
+version = "0.2.6"
 edition = "2021"
 description = "A fast, configurable Fortran formatter with Fypp, Doxygen, and OpenACC/OpenMP support"
 license = "MIT"

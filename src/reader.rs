@@ -79,6 +79,26 @@ fn strip_leading_amp(line: &str) -> &str {
 }
 
 /// Read source text into logical lines.
+/// Strip leading `& !` from continuation-comment lines.
+/// Lines like `& ! some comment text` are continuation lines that contain
+/// only a comment after the `&`. Cray ftn (ftn-71) rejects these as invalid.
+/// Convert them to plain comment lines by removing the leading `&`.
+fn strip_amp_comment_continuation(line: &str) -> String {
+    let trimmed = line.trim_start();
+    // Match: leading `&` followed by optional spaces then `!` (but not `!$` for OpenACC/OMP)
+    if trimmed.starts_with("& !") && !trimmed.starts_with("& !$") {
+        // Check there's no code between & and ! — only whitespace
+        let after_amp = &trimmed[1..].trim_start();
+        if after_amp.starts_with('!') && !after_amp.starts_with("!$") {
+            // Convert to plain comment: preserve indentation, replace `& !` with `!`
+            let indent = line.len() - line.trim_start().len();
+            let comment = &trimmed[1..].trim_start(); // "! comment text"
+            return format!("{}{}", " ".repeat(indent), comment);
+        }
+    }
+    line.to_string()
+}
+
 /// Strip trailing `!&` (with optional surrounding whitespace) from a line.
 /// `!&` is a no-op comment used in some codebases to suppress compiler warnings
 /// about line continuations. It carries no semantic meaning and can confuse
@@ -127,8 +147,10 @@ pub fn read_logical_lines(source: &str) -> Vec<LogicalLine> {
     let mut result: Vec<LogicalLine> = Vec::new();
     let mut i = 0usize;
 
-    // Pre-process: strip trailing `!&` from all lines
-    let cleaned: Vec<String> = raw[..raw_count].iter().map(|l| strip_trailing_bang_amp(l)).collect();
+    // Pre-process: strip trailing `!&` and convert `& ! comment` continuations
+    let cleaned: Vec<String> = raw[..raw_count].iter()
+        .map(|l| strip_amp_comment_continuation(&strip_trailing_bang_amp(l)))
+        .collect();
 
     while i < raw_count {
         let raw_line = cleaned[i].as_str();
@@ -205,6 +227,21 @@ pub fn read_logical_lines(source: &str) -> Vec<LogicalLine> {
             // Preprocessor directives (#ifdef, #ifndef, #else, #endif, #if, #define)
             // must NOT be joined into continuation lines — they need to stay separate
             if cont_line.trim_start().starts_with('#') {
+                break;
+            }
+
+            // If this line is a comment (possibly after `& !` was cleaned to `!`),
+            // stop continuation — Cray ftn rejects `& ! comment` lines (ftn-71).
+            // The comment will be emitted as a separate logical line.
+            // Also strip the trailing `&` from the last accumulated raw line,
+            // since the continuation has no actual code content.
+            let cont_trimmed = cont_line.trim_start();
+            if cont_trimmed.starts_with('!') && !cont_trimmed.starts_with("!$") {
+                if let Some(last_raw) = raw_lines_acc.last_mut() {
+                    if let Some(pos) = find_continuation_amp(last_raw) {
+                        *last_raw = last_raw[..pos].trim_end().to_string();
+                    }
+                }
                 break;
             }
 
