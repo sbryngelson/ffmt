@@ -410,9 +410,27 @@ pub fn format_with_config(
     // Remove blank lines immediately before block closers/continuations
     output_lines = remove_blanks_before_closers(&output_lines);
 
-    // Compact use statements (remove blank lines between consecutive use lines)
+    // Re-wrap !< inline Doxygen comments with !! continuations (before compaction/alignment)
+    if config.rewrap_comments {
+        output_lines = rewrap_inline_doxygen(&output_lines, config.line_length);
+    }
+
+    // Compact use statements (after !< rewrap, since rewrap may consume !! lines)
     if config.compact_use {
         output_lines = compact_use_statements(&output_lines);
+    }
+
+    // Rewrap lines that exceeded line_length after !< comment removal
+    if config.rewrap_code {
+        let mut final_lines: Vec<String> = Vec::new();
+        for line in &output_lines {
+            if line.len() > config.line_length && find_inline_doxygen_in_line(line).is_none() {
+                final_lines.extend(rewrap_line(line, config.line_length, config.indent_width));
+            } else {
+                final_lines.push(line.clone());
+            }
+        }
+        output_lines = final_lines;
     }
 
     // Align :: in consecutive declaration lines
@@ -650,6 +668,145 @@ fn wrap_comment(line: &str, max_length: usize, _depth: usize, _indent_width: usi
     } else {
         result
     }
+}
+
+/// Find `!<` in a line outside strings. Returns byte offset or None.
+fn find_inline_doxygen_in_line(line: &str) -> Option<usize> {
+    let bytes = line.as_bytes();
+    let mut in_string = false;
+    let mut quote_char = b' ';
+    let len = bytes.len();
+    let mut i = 0;
+    while i < len {
+        if in_string {
+            if bytes[i] == quote_char {
+                if i + 1 < len && bytes[i + 1] == quote_char {
+                    i += 2;
+                    continue;
+                }
+                in_string = false;
+            }
+            i += 1;
+            continue;
+        }
+        if bytes[i] == b'\'' || bytes[i] == b'"' {
+            in_string = true;
+            quote_char = bytes[i];
+            i += 1;
+            continue;
+        }
+        if bytes[i] == b'!' && i + 1 < len && bytes[i + 1] == b'<' {
+            return Some(i);
+        }
+        if bytes[i] == b'!' {
+            break;
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Re-wrap `!<` inline Doxygen comments and their `!!` continuation lines.
+///
+/// Pattern: a code line ending with `!<` text, optionally followed by `!!` continuation
+/// lines. The full comment text is joined, and if it fits on the declaration line within
+/// `max_length`, it stays there. Otherwise, `!<` is placed on the declaration line and
+/// the comment is wrapped as `!!` continuation lines below.
+fn rewrap_inline_doxygen(lines: &[String], max_length: usize) -> Vec<String> {
+    let mut result: Vec<String> = Vec::new();
+    let mut i = 0;
+
+    while i < lines.len() {
+        let line = &lines[i];
+
+        // Check if this line has !< outside strings
+        let doxygen_pos = match find_inline_doxygen_in_line(line) {
+            Some(pos) => pos,
+            None => {
+                result.push(line.clone());
+                i += 1;
+                continue;
+            }
+        };
+
+        // Extract the code part (before !<) and comment text (after !<)
+        let code_part = line[..doxygen_pos].trim_end();
+        let comment_part = &line[doxygen_pos..]; // "!< text..."
+        let comment_text = if comment_part.len() > 2 {
+            let after_marker = &comment_part[2..]; // after "!<"
+            if after_marker.starts_with(' ') { &after_marker[1..] } else { after_marker }
+        } else {
+            ""
+        };
+
+        // Collect any following !! continuation lines
+        let mut full_text = comment_text.to_string();
+        let indent = leading_spaces(line);
+        let mut j = i + 1;
+        while j < lines.len() {
+            let next = lines[j].trim_start();
+            if next.starts_with("!!") && !next.starts_with("!!>") {
+                let cont = &next[2..];
+                let cont = if cont.starts_with(' ') { &cont[1..] } else { cont };
+                // Don't join if it starts with @ (separate Doxygen command) or is blank
+                let cont_trimmed = cont.trim();
+                if cont_trimmed.is_empty() || cont_trimmed.starts_with('@') {
+                    break;
+                }
+                full_text.push(' ');
+                full_text.push_str(cont_trimmed);
+                j += 1;
+            } else {
+                break;
+            }
+        }
+
+        let full_text = full_text.trim();
+
+        // Try to fit the full comment on the declaration line
+        if full_text.is_empty() {
+            // Bare !< with no text and no !! continuations — drop the !<
+            result.push(code_part.to_string());
+        } else {
+            let one_line = format!("{} !< {}", code_part, full_text);
+            if one_line.len() <= max_length {
+                result.push(one_line);
+            } else {
+                // Won't fit on one line: emit as !> block comment above the declaration
+                let prefix_first = format!("{}!> ", " ".repeat(indent));
+                let prefix_cont = format!("{}!! ", " ".repeat(indent));
+                let avail_first = if max_length > prefix_first.len() { max_length - prefix_first.len() } else { 40 };
+                let avail_cont = if max_length > prefix_cont.len() { max_length - prefix_cont.len() } else { 40 };
+                let words: Vec<&str> = full_text.split_whitespace().collect();
+                let mut current = String::new();
+                let mut is_first = true;
+                for word in &words {
+                    let avail = if is_first { avail_first } else { avail_cont };
+                    if current.is_empty() {
+                        current = word.to_string();
+                    } else if current.len() + 1 + word.len() <= avail {
+                        current.push(' ');
+                        current.push_str(word);
+                    } else {
+                        let pfx = if is_first { &prefix_first } else { &prefix_cont };
+                        result.push(format!("{}{}", pfx, current));
+                        current = word.to_string();
+                        is_first = false;
+                    }
+                }
+                if !current.is_empty() {
+                    let pfx = if is_first { &prefix_first } else { &prefix_cont };
+                    result.push(format!("{}{}", pfx, current));
+                }
+                result.push(code_part.to_string());
+            }
+        }
+
+        i = j; // skip past the consumed !! continuation lines
+        continue;
+    }
+
+    result
 }
 
 /// Remove blank lines between consecutive `use` statements.
@@ -896,6 +1053,11 @@ fn rewrap_fypp_line(line: &str, max_length: usize) -> Vec<String> {
 /// returns it unchanged as a single-element Vec.
 fn rewrap_line(line: &str, max_length: usize, indent_width: usize) -> Vec<String> {
     if line.len() <= max_length || max_length >= 1000 {
+        return vec![line.to_string()];
+    }
+
+    // Don't wrap lines with !< inline doxygen — rewrap_inline_doxygen handles these
+    if find_inline_doxygen_in_line(line).is_some() {
         return vec![line.to_string()];
     }
 

@@ -128,17 +128,28 @@ fn find_inline_doxygen(line: &str) -> Option<usize> {
 /// Align `!<` inline Doxygen comments in a group of declaration lines.
 /// Lines with `!<` get padded so all `!<` start at the same column.
 /// Lines without `!<` are left unchanged.
+/// Check if an inline doxygen comment has actual text (not just bare `!<`).
+fn has_doxygen_text(line: &str, pos: usize) -> bool {
+    let after = &line[pos..];
+    // Skip "!<" and any trailing whitespace
+    let text = if after.len() > 2 { after[2..].trim() } else { "" };
+    !text.is_empty()
+}
+
 fn align_inline_comments(lines: &mut [String], line_length: usize) {
-    // Count how many lines have !< comments
-    let comment_count = lines.iter().filter(|l| find_inline_doxygen(l).is_some()).count();
+    // Count how many lines have !< comments WITH text (not bare !<)
+    let comment_count = lines.iter().filter(|l| {
+        find_inline_doxygen(l).map_or(false, |pos| has_doxygen_text(l, pos))
+    }).count();
     if comment_count < 2 {
         return;
     }
 
-    // Find the max code-content length (before !<) across lines that have !<
+    // Find the max code-content length (before !<) across lines that have !< with text
     let mut max_code_len: usize = 0;
     for line in lines.iter() {
         if let Some(pos) = find_inline_doxygen(line) {
+            if !has_doxygen_text(line, pos) { continue; }
             let before = &line[..pos];
             let trimmed = before.trim_end();
             if trimmed.len() > max_code_len {
@@ -154,8 +165,8 @@ fn align_inline_comments(lines: &mut [String], line_length: usize) {
     let mut would_overflow = false;
     for line in lines.iter() {
         if let Some(pos) = find_inline_doxygen(line) {
+            if !has_doxygen_text(line, pos) { continue; }
             let comment = &line[pos..];
-            // aligned line = max_code_len + 1 (space) + comment.len()
             let aligned_len = max_code_len + 1 + comment.len();
             if aligned_len > line_length {
                 would_overflow = true;
@@ -168,6 +179,7 @@ fn align_inline_comments(lines: &mut [String], line_length: usize) {
         // Fall back to minimal spacing: just ensure 1 space before !<
         for line in lines.iter_mut() {
             if let Some(pos) = find_inline_doxygen(line) {
+                if !has_doxygen_text(line, pos) { continue; }
                 let before = &line[..pos];
                 let comment = &line[pos..];
                 let trimmed_before = before.trim_end();
@@ -177,11 +189,12 @@ fn align_inline_comments(lines: &mut [String], line_length: usize) {
         return;
     }
 
-    // Re-align each line that has !<
+    // Re-align each line that has !< with text (skip bare !<)
     for line in lines.iter_mut() {
         if let Some(pos) = find_inline_doxygen(line) {
+            if !has_doxygen_text(line, pos) { continue; }
             let before = &line[..pos];
-            let comment = &line[pos..]; // includes "!< ..."
+            let comment = &line[pos..];
             let trimmed_before = before.trim_end();
             let padding = max_code_len - trimmed_before.len();
             *line = format!("{}{} {}", trimmed_before, " ".repeat(padding), comment);
@@ -276,7 +289,23 @@ pub fn align_declarations(lines: &[String], compact: bool, align_comments: bool,
                 }
             }
 
-            // Now re-align each line's ::
+            // Check if alignment would push any line past line_length
+            let mut would_overflow_colon = false;
+            for line in &result[group_start..group_end] {
+                if let Some(pos) = find_double_colon(line) {
+                    let after_colon = &line[pos + 2..];
+                    let after_trimmed = after_colon.trim_start();
+                    // aligned line = max_pre_colon_len + " :: " + after_trimmed
+                    let aligned_len = max_pre_colon_len + 4 + after_trimmed.len();
+                    if aligned_len > line_length {
+                        would_overflow_colon = true;
+                        break;
+                    }
+                }
+            }
+
+            // Now re-align each line's :: (skip if it would overflow)
+            if !would_overflow_colon {
             for line in &mut result[group_start..group_end] {
                 if let Some(pos) = find_double_colon(line) {
                     let before_colon = &line[..pos];
@@ -295,6 +324,7 @@ pub fn align_declarations(lines: &[String], compact: bool, align_comments: bool,
                     *line = new_line;
                 }
             }
+            } // end if !would_overflow_colon
 
             // Align !< inline comments within the group
             if align_comments {
