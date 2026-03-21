@@ -6,68 +6,60 @@ pub struct LogicalLine {
     pub line_number: usize,
 }
 
-/// Scan a line and return the index of a trailing `&` continuation character,
-/// ignoring `&` inside string literals. Returns `None` if the line does not
-/// end with a continuation `&`.
+/// Scan a line and return the index of a trailing `&` continuation character.
+/// Returns `None` if the line does not end with a continuation `&`.
 ///
-/// A trailing `&` means: after stripping any trailing comment (`! ...` outside
-/// strings), the last non-whitespace character is `&`.
+/// In Fortran free-form source, `&` as the last non-whitespace character
+/// before any comment is ALWAYS a continuation marker, even inside strings
+/// that span multiple lines. String state is only tracked to correctly
+/// identify where comments start (`!` inside a string is not a comment).
 fn find_continuation_amp(line: &str) -> Option<usize> {
-    // Walk the line char-by-char tracking string state
     let chars: Vec<char> = line.chars().collect();
     let n = chars.len();
 
+    // Step 1: Find where the comment starts (! outside strings)
     let mut in_string = false;
     let mut string_delim = ' ';
+    let mut comment_start = n; // index into chars
     let mut i = 0;
-    // Track the byte position of the last `&` outside a string and outside a comment
-    let mut last_amp_byte: Option<usize> = None;
-    let mut byte_pos = 0usize;
-
     while i < n {
         let ch = chars[i];
-
         if in_string {
             if ch == string_delim {
-                // Check for doubled quote (escape)
                 if i + 1 < n && chars[i + 1] == string_delim {
-                    byte_pos += ch.len_utf8();
-                    i += 1;
-                    byte_pos += chars[i].len_utf8();
-                    i += 1;
+                    i += 2; // skip doubled quote escape
                     continue;
                 }
                 in_string = false;
             }
-            byte_pos += ch.len_utf8();
             i += 1;
             continue;
         }
-
-        // Outside string
         if ch == '\'' || ch == '"' {
             in_string = true;
             string_delim = ch;
-            last_amp_byte = None; // reset — we're now entering a string
-            byte_pos += ch.len_utf8();
             i += 1;
             continue;
         }
-
         if ch == '!' {
-            // Start of comment — stop scanning
+            comment_start = i;
             break;
         }
+        i += 1;
+    }
 
+    // Step 2: Find the last non-whitespace char before the comment.
+    // If it's `&`, that's the continuation marker.
+    let mut last_amp_byte: Option<usize> = None;
+    let mut byte_pos = 0usize;
+    for i in 0..comment_start {
+        let ch = chars[i];
         if ch == '&' {
             last_amp_byte = Some(byte_pos);
         } else if !ch.is_whitespace() {
-            // Non-whitespace, non-& outside string → reset
             last_amp_byte = None;
         }
-
         byte_pos += ch.len_utf8();
-        i += 1;
     }
 
     last_amp_byte

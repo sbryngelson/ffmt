@@ -242,8 +242,9 @@ pub fn format_with_config(
                             if cont_text.starts_with('@') || cont_text.trim().is_empty() {
                                 break;
                             }
+                            let cont_text = if config.unicode_to_ascii { crate::unicode::replace_unicode(cont_text) } else { cont_text.to_string() };
                             full_text.push(' ');
-                            full_text.push_str(cont_text);
+                            full_text.push_str(&cont_text);
                             idx += 1;
                             // Process scope for skipped lines
                             let _ = tracker.process(next_kind);
