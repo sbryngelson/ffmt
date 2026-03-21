@@ -1043,7 +1043,6 @@ fn join_short_comments(lines: &[String], max_length: usize) -> Vec<String> {
 
         // Detect which comment marker this line uses
         let marker = if trimmed.starts_with("!! ") && !trimmed.starts_with("!!>") {
-            // Don't join !! lines that start with @ (Doxygen commands)
             let text_after = &trimmed[3..];
             if text_after.starts_with('@') { None } else { Some("!!") }
         } else if trimmed.starts_with("! ") && !trimmed.starts_with("!> ")
@@ -1056,37 +1055,57 @@ fn join_short_comments(lines: &[String], max_length: usize) -> Vec<String> {
         };
 
         if let Some(mk) = marker {
-            let mk_len = mk.len(); // 1 for "!", 2 for "!!"
+            let mk_len = mk.len();
             let indent = leading_spaces(line);
-            let mut text = trimmed[mk_len + 1..].to_string(); // text after marker + space
+            let prefix = format!("{}{} ", " ".repeat(indent), mk);
+            let avail = if max_length > prefix.len() { max_length - prefix.len() } else { 40 };
+
+            // Collect ALL consecutive comment lines with the same marker and indent
+            let mut full_text = trimmed[mk_len + 1..].to_string();
             let mut j = i + 1;
 
-            // Collect consecutive comment lines with the same marker and indent
             while j < lines.len() {
                 let next = &lines[j];
                 let next_trimmed = next.trim_start();
                 let next_indent = leading_spaces(next);
                 let next_matches = next_indent == indent && next_trimmed.starts_with(mk)
                     && next_trimmed.len() > mk_len && next_trimmed.as_bytes()[mk_len] == b' ';
-                // For !!, don't join lines starting with @ (Doxygen commands)
                 let next_matches = next_matches && !(mk == "!!" && next_trimmed[mk_len + 1..].starts_with('@'));
 
                 if next_matches {
-                    let next_text = &next_trimmed[mk_len + 1..];
-                    let joined_len = indent + mk_len + 1 + text.len() + 1 + next_text.len();
-                    if joined_len <= max_length {
-                        text.push(' ');
-                        text.push_str(next_text);
-                        j += 1;
-                    } else {
-                        break;
-                    }
+                    full_text.push(' ');
+                    full_text.push_str(&next_trimmed[mk_len + 1..]);
+                    j += 1;
                 } else {
                     break;
                 }
             }
 
-            result.push(format!("{}{} {}", " ".repeat(indent), mk, text));
+            // If only one line and it already fits, emit as-is
+            if j == i + 1 {
+                result.push(line.clone());
+                i = j;
+                continue;
+            }
+
+            // Rewrap the joined text at word boundaries
+            let words: Vec<&str> = full_text.split_whitespace().collect();
+            let mut current = String::new();
+            for word in &words {
+                if current.is_empty() {
+                    current = word.to_string();
+                } else if current.len() + 1 + word.len() <= avail {
+                    current.push(' ');
+                    current.push_str(word);
+                } else {
+                    result.push(format!("{}{}", prefix, current));
+                    current = word.to_string();
+                }
+            }
+            if !current.is_empty() {
+                result.push(format!("{}{}", prefix, current));
+            }
+
             i = j;
         } else {
             result.push(line.clone());
