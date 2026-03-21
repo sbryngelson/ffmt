@@ -213,10 +213,12 @@ pub fn format_with_config(
             match kind {
                 LineKind::Comment => {
                     let content = trimmed.trim_start();
-                    let content = normalize_comment_space(content);
+                    let content = crate::unicode::replace_unicode(content);
+                    let content = normalize_comment_space(&content);
                     if content.starts_with("!!") {
-                        // Doxygen continuation that wasn't preceded by !> — preserve
-                        output_lines.push(trimmed.to_string());
+                        // Doxygen continuation that wasn't preceded by !>
+                        let replaced = crate::unicode::replace_unicode(trimmed);
+                        output_lines.push(replaced);
                     } else if content.starts_with("!>") {
                         // Doxygen start: collect any following !! continuation lines,
                         // join the text, and re-wrap as a single block
