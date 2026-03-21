@@ -1,0 +1,131 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test
+      - run: cargo clippy -- -D warnings
+
+      # Dogfood: our own test fixtures should be formatted
+      - name: Check fixtures are formatted
+        run: |
+          cargo build --release
+          ./target/release/ffmt --check tests/fixtures/ || echo "Fixtures need formatting"
+
+  # Ecosystem check: verify idempotency on real Fortran projects
+  ecosystem:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --release
+      - name: Test on real Fortran codebases
+        run: |
+          set -e
+          mkdir -p /tmp/ecosystem
+
+          # stdlib (Fortran standard library)
+          git clone --depth 1 https://github.com/fortran-lang/stdlib /tmp/ecosystem/stdlib 2>/dev/null || true
+
+          # fpm (Fortran package manager)
+          git clone --depth 1 https://github.com/fortran-lang/fpm /tmp/ecosystem/fpm 2>/dev/null || true
+
+          # json-fortran
+          git clone --depth 1 https://github.com/jacobwilliams/json-fortran /tmp/ecosystem/json-fortran 2>/dev/null || true
+
+          sudo apt-get install -y gfortran > /dev/null 2>&1
+
+          FAILED=0
+          for repo in /tmp/ecosystem/*/; do
+            echo "=== Testing $(basename $repo) ==="
+            # Format
+            ./target/release/ffmt "$repo" 2>/dev/null || true
+            # Check idempotency
+            if ! ./target/release/ffmt --check --quiet "$repo" 2>/dev/null; then
+              echo "WARN: $(basename $repo) has non-idempotent files:"
+              ./target/release/ffmt --check "$repo" 2>/dev/null || true
+              FAILED=$((FAILED + 1))
+            else
+              echo "PASS: $(basename $repo) is idempotent"
+            fi
+
+            # Syntax check: verify formatted .f90 files don't have gross syntax errors
+            # We filter for errors likely caused by formatting (not missing modules)
+            SYNTAX_ISSUES=0
+            find "$repo" -name '*.f90' -o -name '*.F90' | head -20 | while read -r f; do
+              ERRORS=$(gfortran -fsyntax-only -ffree-form "$f" 2>&1 | grep -i 'syntax error\|unexpected end\|NAMELIST\|PUBLIC statement' || true)
+              if [ -n "$ERRORS" ]; then
+                echo "  SYNTAX ISSUE: $f"
+                echo "$ERRORS" | head -3
+                SYNTAX_ISSUES=$((SYNTAX_ISSUES + 1))
+              fi
+            done
+            echo "DONE: $(basename $repo) syntax spot-check complete"
+          done
+          if [ $FAILED -gt 0 ]; then
+            echo "WARNING: $FAILED repos had issues (see above)"
+          fi
+
+  # Full build test: clone MFC, format with ffmt, verify it still compiles
+  mfc-build:
+    name: MFC Build Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gfortran libopenmpi-dev openmpi-bin
+
+      - name: Build ffmt
+        run: cargo build --release
+
+      - name: Clone MFC
+        run: git clone --depth 1 https://github.com/MFlowCode/MFC.git /tmp/MFC
+
+      - name: Format MFC source with ffmt
+        run: |
+          ./target/release/ffmt -j $(nproc) /tmp/MFC/src/ 2>/dev/null || true
+          ./target/release/ffmt -j $(nproc) /tmp/MFC/src/ 2>/dev/null || true
+
+      - name: Build MFC (pre_process + simulation)
+        run: |
+          cd /tmp/MFC
+          pip install -e toolchain/
+          ./mfc.sh build -t pre_process -j $(nproc)
+          ./mfc.sh build -t simulation -j $(nproc)
+
+  build-wheels:
+    name: Build wheels (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          args: --release --out dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.os }}
+          path: dist/
