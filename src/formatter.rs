@@ -1038,7 +1038,11 @@ fn ensure_blank_after_end(lines: &[String]) -> Vec<String> {
                 // blank line before end subroutine/function
                 || is_end_procedure_line(line)
                 // blank line after module/program/subroutine/function opener
-                || ((is_module_or_program(prev) || is_procedure_opener(prev)) && !line.trim().is_empty())
+                // (but not if the opener has a continuation, or current line is a continuation)
+                || ((is_module_or_program(prev) || is_procedure_opener(prev))
+                    && !line.trim().is_empty()
+                    && !prev.trim_end().ends_with('&')
+                    && !trimmed.starts_with('&'))
                 // blank line before contains
                 || trimmed.eq_ignore_ascii_case("contains");
             if needs_blank {
