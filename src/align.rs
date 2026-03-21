@@ -139,7 +139,7 @@ fn has_doxygen_text(line: &str, pos: usize) -> bool {
 fn align_inline_comments(lines: &mut [String], line_length: usize) {
     // Count how many lines have !< comments WITH text (not bare !<)
     let comment_count = lines.iter().filter(|l| {
-        find_inline_doxygen(l).map_or(false, |pos| has_doxygen_text(l, pos))
+        find_inline_doxygen(l).is_some_and(|pos| has_doxygen_text(l, pos))
     }).count();
     if comment_count < 2 {
         return;

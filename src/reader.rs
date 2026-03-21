@@ -52,8 +52,8 @@ fn find_continuation_amp(line: &str) -> Option<usize> {
     // If it's `&`, that's the continuation marker.
     let mut last_amp_byte: Option<usize> = None;
     let mut byte_pos = 0usize;
-    for i in 0..comment_start {
-        let ch = chars[i];
+    for ch in chars.iter().take(comment_start) {
+        let ch = *ch;
         if ch == '&' {
             last_amp_byte = Some(byte_pos);
         } else if !ch.is_whitespace() {

@@ -750,7 +750,7 @@ fn rewrap_inline_doxygen(lines: &[String], max_length: usize) -> Vec<String> {
             let comment_part = &line[doxygen_pos..];
             let text = if comment_part.len() > 2 {
                 let after = &comment_part[2..];
-                if after.starts_with(' ') { &after[1..] } else { after }
+                after.strip_prefix(' ').unwrap_or(after)
             } else {
                 ""
             };
@@ -766,7 +766,7 @@ fn rewrap_inline_doxygen(lines: &[String], max_length: usize) -> Vec<String> {
         let comment_part = &line[doxygen_pos..]; // "!< text..."
         let comment_text = if comment_part.len() > 2 {
             let after_marker = &comment_part[2..]; // after "!<"
-            if after_marker.starts_with(' ') { &after_marker[1..] } else { after_marker }
+            after_marker.strip_prefix(' ').unwrap_or(after_marker)
         } else {
             ""
         };
@@ -790,7 +790,7 @@ fn rewrap_inline_doxygen(lines: &[String], max_length: usize) -> Vec<String> {
             let next = lines[j].trim_start();
             if next.starts_with("!!") && !next.starts_with("!!>") {
                 let cont = &next[2..];
-                let cont = if cont.starts_with(' ') { &cont[1..] } else { cont };
+                let cont = cont.strip_prefix(' ').unwrap_or(cont);
                 // Don't join if it starts with @ (separate Doxygen command)
                 let cont_trimmed = cont.trim();
                 if cont_trimmed.starts_with('@') {
@@ -1040,7 +1040,7 @@ fn ensure_blank_after_end(lines: &[String]) -> Vec<String> {
                 // blank line after module/program/subroutine/function opener
                 || ((is_module_or_program(prev) || is_procedure_opener(prev)) && !line.trim().is_empty())
                 // blank line before contains
-                || trimmed.to_ascii_lowercase() == "contains";
+                || trimmed.eq_ignore_ascii_case("contains");
             if needs_blank {
                 result.push(String::new());
             }
@@ -1186,6 +1186,9 @@ fn separate_declarations_from_code(lines: &[String]) -> Vec<String> {
     // Track whether we're in a declaration region at the top of a procedure
     let mut in_decl_region = false;
     let mut saw_declaration = false;
+    let proc_re = regex::Regex::new(
+        r"(?i)^(?:(?:pure|elemental|impure|recursive|module|integer|real|double\s+precision|complex|character|logical|type\s*\([^)]*\))\s+)*(subroutine|function)\b"
+    ).unwrap();
 
     for line in lines {
         let trimmed = line.trim();
@@ -1193,12 +1196,7 @@ fn separate_declarations_from_code(lines: &[String]) -> Vec<String> {
 
         // Detect procedure entry (subroutine/function opening)
         if !trimmed.is_empty() && !lower.starts_with("end ") {
-            let is_proc_start = {
-                let re = regex::Regex::new(
-                    r"(?i)^(?:(?:pure|elemental|impure|recursive|module|integer|real|double\s+precision|complex|character|logical|type\s*\([^)]*\))\s+)*(subroutine|function)\b"
-                ).unwrap();
-                re.is_match(&lower)
-            };
+            let is_proc_start = proc_re.is_match(&lower);
             if is_proc_start {
                 in_decl_region = true;
                 saw_declaration = false;
