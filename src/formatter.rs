@@ -1169,9 +1169,22 @@ fn separate_declarations_from_code(lines: &[String]) -> Vec<String> {
         }
 
         if in_decl_region {
-            // Skip blank lines and comments — they don't end the declaration region
+            // Skip blank lines, comments, preprocessor, and continuation lines
             if trimmed.is_empty() || trimmed.starts_with('!') || trimmed.starts_with('#')
-                || trimmed.starts_with("@:") || trimmed.starts_with("$:") {
+                || trimmed.starts_with('&') {
+                result.push(line.clone());
+                continue;
+            }
+
+            // Fypp lines ($:, @:) are executable — end the declaration region
+            if trimmed.starts_with("@:") || trimmed.starts_with("$:") {
+                in_decl_region = false;
+                if saw_declaration {
+                    let has_blank = result.last().is_some_and(|l| l.trim().is_empty());
+                    if !has_blank {
+                        result.push(String::new());
+                    }
+                }
                 result.push(line.clone());
                 continue;
             }
