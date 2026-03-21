@@ -955,7 +955,7 @@ fn remove_blanks_before_closers(lines: &[String]) -> Vec<String> {
             continue; // skip this blank line
         }
 
-        let is_opener = !is_closer && (trimmed.ends_with("then")
+        let is_opener = (trimmed.ends_with("then")
             || (trimmed.starts_with("do ") && !trimmed.starts_with("do concurrent"))
             || trimmed.starts_with("do concurrent")
             || trimmed == "do"
@@ -972,7 +972,21 @@ fn remove_blanks_before_closers(lines: &[String]) -> Vec<String> {
             || trimmed.starts_with("#ifdef")
             || trimmed.starts_with("#ifndef")
             || trimmed.starts_with("#if ")
-            || is_doxygen_opener);
+            || is_doxygen_opener)
+            // Continuations act as both closer and opener (else, case, #else, #elif, etc.)
+            || (is_closer && (trimmed.starts_with("else")
+                || trimmed.starts_with("case ")
+                || trimmed == "case default"
+                || trimmed.starts_with("class ")
+                || trimmed == "class default"
+                || trimmed.starts_with("type is")
+                || trimmed.starts_with("rank ")
+                || trimmed == "rank default"
+                || trimmed.starts_with("elsewhere")
+                || trimmed.starts_with("#else")
+                || trimmed.starts_with("#elif")
+                || trimmed.starts_with("#:else")
+                || trimmed.starts_with("#:elif")));
 
         prev_was_opener = is_opener;
 
