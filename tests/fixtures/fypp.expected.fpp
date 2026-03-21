@@ -2,8 +2,10 @@
 module m_fypp_test
 
     implicit none
+
 contains
     subroutine s_test()
+
         #:if defined('MFC_OpenACC')
             $:GPU_PARALLEL_LOOP(collapse=3)
             do k = 0, p

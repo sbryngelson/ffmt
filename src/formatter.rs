@@ -939,10 +939,11 @@ fn remove_blanks_before_closers(lines: &[String]) -> Vec<String> {
             || trimmed.starts_with("#else")
             || is_doxygen_closer;
 
-        // Remove blank lines before closers (but not before end subroutine/function —
-        // those get a blank line for visual separation)
+        // Remove blank lines before closers (but not before end subroutine/function
+        // or contains — those get a blank line for visual separation)
         let is_proc_end = trimmed.starts_with("end subroutine") || trimmed.starts_with("end function");
-        if is_closer && !is_proc_end {
+        let is_contains = trimmed == "contains";
+        if is_closer && !is_proc_end && !is_contains {
             while result.last().is_some_and(|l| l.trim().is_empty()) {
                 result.pop();
             }
@@ -961,8 +962,6 @@ fn remove_blanks_before_closers(lines: &[String]) -> Vec<String> {
             || trimmed.starts_with("select case")
             || trimmed.starts_with("select type")
             || trimmed.starts_with("select rank")
-            || (trimmed.starts_with("subroutine ") || trimmed.contains(" subroutine "))
-            || (trimmed.starts_with("function ") || trimmed.contains(" function "))
             || trimmed.starts_with("block")
             || trimmed.starts_with("associate")
             || trimmed.starts_with("critical")
@@ -1010,11 +1009,21 @@ fn is_module_or_program(line: &str) -> bool {
         || lower.starts_with("submodule ")
 }
 
+/// Check if a line is a subroutine/function opener.
+fn is_procedure_opener(line: &str) -> bool {
+    let lower = line.trim().to_ascii_lowercase();
+    let re = regex::Regex::new(
+        r"(?i)^(?:(?:pure|elemental|impure|recursive|module|integer|real|double\s+precision|complex|character|logical|type\s*\([^)]*\))\s+)*(subroutine|function)\b"
+    ).unwrap();
+    re.is_match(&lower)
+}
+
 /// Ensure blank lines at structural boundaries:
 /// 1. Between major block closers and `!>` Doxygen block comments
 /// 2. Between `end subroutine`/`end function` and `end module`/`end program`
 /// 3. Before `end subroutine`/`end function` (visual separation of procedure body)
-/// 4. After `module`/`program` openers
+/// 4. After `module`/`program`/`subroutine`/`function` openers
+/// 5. Before `contains`
 fn ensure_blank_after_end(lines: &[String]) -> Vec<String> {
     let mut result: Vec<String> = Vec::with_capacity(lines.len());
 
@@ -1028,8 +1037,10 @@ fn ensure_blank_after_end(lines: &[String]) -> Vec<String> {
                 || (is_end_enclosing_block(line) && is_end_procedure_line(prev))
                 // blank line before end subroutine/function
                 || is_end_procedure_line(line)
-                // blank line after module/program opener (only before non-blank content)
-                || (is_module_or_program(prev) && !line.trim().is_empty());
+                // blank line after module/program/subroutine/function opener
+                || ((is_module_or_program(prev) || is_procedure_opener(prev)) && !line.trim().is_empty())
+                // blank line before contains
+                || trimmed.to_ascii_lowercase() == "contains";
             if needs_blank {
                 result.push(String::new());
             }

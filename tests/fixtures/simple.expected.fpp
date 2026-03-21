@@ -5,8 +5,10 @@ module m_test
     private; public :: s_foo
     integer :: x
     real    :: y
+
 contains
     subroutine s_foo(a, b)
+
         integer, intent(in) :: a, b
 
         if (a == b)then

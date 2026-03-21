@@ -1,9 +1,11 @@
 module m_test
 
     implicit none
+
 contains
 
     subroutine s_first()
+
         integer :: x
 
         x = 1
@@ -12,6 +14,7 @@ contains
 
     !> @brief Second procedure Does something else
     subroutine s_second()
+
         integer :: y
 
         y = 2
@@ -20,6 +23,7 @@ contains
 
     !> Third procedure with a long description that documents what this function does
     function f_third() result(z)
+
         integer :: z
 
         z = 3
@@ -28,6 +32,7 @@ contains
 
     !> Fourth procedure
     subroutine s_fourth()
+
         integer :: w
 
         w = 4
