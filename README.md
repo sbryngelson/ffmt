@@ -121,6 +121,17 @@ repos:
       - id: ffmt
 ```
 
+## Other Fortran Formatters
+
+| Formatter | Language | Status | Notes |
+|-----------|----------|--------|-------|
+| [fprettify](https://github.com/fortran-lang/fprettify) | Python | Unmaintained (last release 2020) | Free-form only. Fypp support. Requires multiple passes for convergence. |
+| [findent](https://github.com/wvermin/findent) | C | Active | Indentation and fixed/free conversion. No whitespace normalization. |
+| [Codee Formatter](https://www.codee.com) | Proprietary | Active | Commercial. Tree-sitter based. Fixed and free-form. |
+| [LFortran fmt](https://lfortran.org) | Rust | In development | AST-based. Part of the LFortran compiler project. |
+| [Fortitude](https://github.com/PlasmaFAIR/fortitude) | Rust | Active | Linter with auto-fix, not a full formatter. Tree-sitter based. |
+| [f90-mode](https://www.gnu.org/software/emacs/manual/html_node/emacs/Fortran.html) | Emacs Lisp | Active | Emacs built-in. Indentation only. |
+
 ## License
 
 MIT
