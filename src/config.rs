@@ -33,6 +33,9 @@ pub struct Config {
     /// Align :: in consecutive declaration blocks.
     #[serde(rename = "align-declarations")]
     pub align_declarations: bool,
+    /// Align !< inline Doxygen comments in declaration blocks.
+    #[serde(rename = "align-comments")]
+    pub align_comments: bool,
     /// Remove blank lines between consecutive declarations.
     #[serde(rename = "compact-declarations")]
     pub compact_declarations: bool,
@@ -125,6 +128,7 @@ impl Default for Config {
             indent_module: true,
             named_ends: true,
             align_declarations: true,
+            align_comments: true,
             compact_declarations: true,
             compact_use: true,
             unicode_to_ascii: true,
