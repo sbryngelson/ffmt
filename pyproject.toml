@@ -1,0 +1,25 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "ffmt"
+version = "0.2.1"
+description = "A fast, configurable Fortran formatter with Fypp, Doxygen, and OpenACC/OpenMP support"
+license = { text = "MIT" }
+requires-python = ">=3.8"
+readme = "README.md"
+keywords = ["fortran", "formatter", "linter", "code-quality"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Fortran",
+    "Programming Language :: Rust",
+    "Topic :: Software Development :: Quality Assurance",
+]
+
+[tool.maturin]
+# Binary-only distribution — no Python bindings, just the ffmt CLI
+bindings = "bin"
