@@ -743,18 +743,32 @@ fn rewrap_inline_doxygen(lines: &[String], max_length: usize) -> Vec<String> {
         let mut full_text = comment_text.to_string();
         let indent = leading_spaces(line);
         let mut j = i + 1;
+
+        // Skip blank lines between !< and !! continuations
+        while j < lines.len() && lines[j].trim().is_empty() {
+            j += 1;
+        }
+
         while j < lines.len() {
             let next = lines[j].trim_start();
             if next.starts_with("!!") && !next.starts_with("!!>") {
                 let cont = &next[2..];
                 let cont = if cont.starts_with(' ') { &cont[1..] } else { cont };
-                // Don't join if it starts with @ (separate Doxygen command) or is blank
+                // Don't join if it starts with @ (separate Doxygen command)
                 let cont_trimmed = cont.trim();
-                if cont_trimmed.is_empty() || cont_trimmed.starts_with('@') {
+                if cont_trimmed.starts_with('@') {
                     break;
+                }
+                // Skip blank !! continuation lines
+                if cont_trimmed.is_empty() {
+                    j += 1;
+                    continue;
                 }
                 full_text.push(' ');
                 full_text.push_str(cont_trimmed);
+                j += 1;
+            } else if next.is_empty() {
+                // Skip blank lines between !! continuation lines
                 j += 1;
             } else {
                 break;
