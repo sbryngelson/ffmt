@@ -216,9 +216,9 @@ pub fn format_with_config(
                     let content = if config.unicode_to_ascii { crate::unicode::replace_unicode(content) } else { content.to_string() };
                     let content = if config.space_after_comment { normalize_comment_space(&content) } else { content };
                     if content.starts_with("!!") {
-                        // Doxygen continuation that wasn't preceded by !>
-                        let replaced = if config.unicode_to_ascii { crate::unicode::replace_unicode(trimmed) } else { trimmed.to_string() };
-                        output_lines.push(replaced);
+                        // Doxygen continuation: apply proper indentation
+                        let indented = apply_indent(&content, depth, config.indent_width);
+                        output_lines.push(indented);
                     } else if content.starts_with("!>") {
                         // Doxygen start: collect any following !! continuation lines,
                         // join the text, and re-wrap as a single block
@@ -901,7 +901,7 @@ fn remove_blanks_before_closers(lines: &[String]) -> Vec<String> {
             continue; // skip this blank line
         }
 
-        let is_opener = trimmed.ends_with("then")
+        let is_opener = !is_closer && (trimmed.ends_with("then")
             || (trimmed.starts_with("do ") && !trimmed.starts_with("do concurrent"))
             || trimmed.starts_with("do concurrent")
             || trimmed == "do"
@@ -918,7 +918,7 @@ fn remove_blanks_before_closers(lines: &[String]) -> Vec<String> {
             || trimmed.starts_with("#:if ")
             || trimmed.starts_with("#:for ")
             || trimmed.starts_with("#:call ")
-            || trimmed.starts_with("#:def ");
+            || trimmed.starts_with("#:def "));
 
         prev_was_opener = is_opener;
 
