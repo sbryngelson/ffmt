@@ -1243,8 +1243,8 @@ fn separate_declarations_from_code(lines: &[String]) -> Vec<String> {
                 continue;
             }
 
-            // Fypp lines ($:, @:) and #ifdef/#ifndef/#if — end the declaration region
-            if trimmed.starts_with("@:") || trimmed.starts_with("$:")
+            // Fypp lines ($:, @:, #:) and #ifdef/#ifndef/#if — end the declaration region
+            if trimmed.starts_with("@:") || trimmed.starts_with("$:") || trimmed.starts_with("#:")
                 || trimmed.starts_with("#ifdef") || trimmed.starts_with("#ifndef")
                 || trimmed.starts_with("#if ") {
                 in_decl_region = false;
