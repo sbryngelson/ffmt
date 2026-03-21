@@ -963,8 +963,6 @@ fn remove_blanks_before_closers(lines: &[String]) -> Vec<String> {
             || trimmed.starts_with("select rank")
             || (trimmed.starts_with("subroutine ") || trimmed.contains(" subroutine "))
             || (trimmed.starts_with("function ") || trimmed.contains(" function "))
-            || trimmed.starts_with("module ") && !trimmed.starts_with("module procedure")
-            || trimmed.starts_with("program ")
             || trimmed.starts_with("block")
             || trimmed.starts_with("associate")
             || trimmed.starts_with("critical")
@@ -1004,10 +1002,19 @@ fn is_end_enclosing_block(line: &str) -> bool {
     lower.starts_with("end module") || lower.starts_with("end submodule") || lower.starts_with("end program")
 }
 
-/// Ensure blank lines after major block closers where needed:
+/// Check if a line is a `module` or `program` opener (not `module procedure`).
+fn is_module_or_program(line: &str) -> bool {
+    let lower = line.trim().to_ascii_lowercase();
+    (lower.starts_with("module ") && !lower.starts_with("module procedure"))
+        || lower.starts_with("program ")
+        || lower.starts_with("submodule ")
+}
+
+/// Ensure blank lines at structural boundaries:
 /// 1. Between major block closers and `!>` Doxygen block comments
 /// 2. Between `end subroutine`/`end function` and `end module`/`end program`
 /// 3. Before `end subroutine`/`end function` (visual separation of procedure body)
+/// 4. After `module`/`program` openers
 fn ensure_blank_after_end(lines: &[String]) -> Vec<String> {
     let mut result: Vec<String> = Vec::with_capacity(lines.len());
 
@@ -1020,7 +1027,9 @@ fn ensure_blank_after_end(lines: &[String]) -> Vec<String> {
                 // end module/program after end subroutine/function
                 || (is_end_enclosing_block(line) && is_end_procedure_line(prev))
                 // blank line before end subroutine/function
-                || is_end_procedure_line(line);
+                || is_end_procedure_line(line)
+                // blank line after module/program opener (only before non-blank content)
+                || (is_module_or_program(prev) && !line.trim().is_empty());
             if needs_blank {
                 result.push(String::new());
             }

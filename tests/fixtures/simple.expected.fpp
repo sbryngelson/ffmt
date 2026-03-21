@@ -1,4 +1,5 @@
 module m_test
+
     use m_types
     implicit none
     private; public :: s_foo
