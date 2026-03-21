@@ -75,7 +75,7 @@ jobs:
             echo "WARNING: $FAILED repos had issues (see above)"
           fi
 
-  # Full build test: clone MFC, format with ffmt, verify it still compiles
+  # Full build test: clone MFC, format with ffmt, verify it still compiles (gfortran)
   mfc-build:
     name: MFC Build Test
     runs-on: ubuntu-latest
@@ -108,6 +108,60 @@ jobs:
           pip install -e toolchain/
           ./mfc.sh build -t pre_process -j $(nproc)
           ./mfc.sh build -t simulation -j $(nproc)
+
+  # NVHPC build test: format MFC with ffmt, compile with nvfortran (CPU + GPU)
+  mfc-nvhpc:
+    name: MFC NVHPC ${{ matrix.target }}
+    runs-on: ubuntu-22.04
+    container: nvcr.io/nvidia/nvhpc:24.5-devel-cuda_multi-ubuntu22.04
+    env:
+      CC:  nvc
+      CXX: nvc++
+      FC:  nvfortran
+      OMPI_ALLOW_RUN_AS_ROOT:         1
+      OMPI_ALLOW_RUN_AS_ROOT_CONFIRM: 1
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [cpu, gpu-acc, gpu-omp]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          apt-get update -y
+          apt-get install -y cmake python3 python3-venv python3-pip \
+                             libfftw3-dev libhdf5-dev hdf5-tools \
+                             openmpi-bin libopenmpi-dev git curl
+
+      - name: Install Rust
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+      - name: Build ffmt
+        run: |
+          . "$HOME/.cargo/env"
+          cargo build --release
+
+      - name: Clone MFC
+        run: git clone --depth 1 https://github.com/MFlowCode/MFC.git /tmp/MFC
+
+      - name: Format MFC source with ffmt
+        run: |
+          . "$HOME/.cargo/env"
+          ./target/release/ffmt -j $(nproc) /tmp/MFC/src/ 2>/dev/null || true
+          ./target/release/ffmt -j $(nproc) /tmp/MFC/src/ 2>/dev/null || true
+
+      - name: Build MFC
+        run: |
+          cd /tmp/MFC
+          pip install -e toolchain/
+          GPU_FLAG=""
+          if [ "${{ matrix.target }}" = "gpu-acc" ]; then GPU_FLAG="--gpu acc"; fi
+          if [ "${{ matrix.target }}" = "gpu-omp" ]; then GPU_FLAG="--gpu mp"; fi
+          JOBS=${{ matrix.target == 'cpu' && '$(nproc)' || '2' }}
+          ./mfc.sh build -j $JOBS $GPU_FLAG
 
   build-wheels:
     name: Build wheels (${{ matrix.os }})
