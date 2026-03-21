@@ -410,6 +410,9 @@ pub fn format_with_config(
     // Remove blank lines immediately before block closers/continuations
     output_lines = remove_blanks_before_closers(&output_lines);
 
+    // Ensure a blank line between major block closers and Doxygen comments
+    output_lines = ensure_blank_before_doxygen_after_end(&output_lines);
+
     // Re-wrap !< inline Doxygen comments with !! continuations (before compaction/alignment)
     if config.rewrap_comments {
         output_lines = rewrap_inline_doxygen(&output_lines, config.line_length);
@@ -919,6 +922,38 @@ fn remove_blanks_before_closers(lines: &[String]) -> Vec<String> {
 
         prev_was_opener = is_opener;
 
+        result.push(line.clone());
+    }
+
+    result
+}
+
+/// Check if a line is a major block closer (end subroutine/function/module/program/type/interface).
+/// These are logical unit boundaries that should be separated from following Doxygen comments.
+fn is_major_end_block(line: &str) -> bool {
+    let trimmed = line.trim().to_ascii_lowercase();
+    let re = regex::Regex::new(
+        r"(?i)^end\s+(subroutine|function|module|submodule|program|type|interface)\b"
+    ).unwrap();
+    re.is_match(&trimmed)
+}
+
+/// Ensure a blank line between major block closers and `!>` Doxygen block comments.
+/// Without this, `end subroutine` followed immediately by `!>` for the next procedure
+/// looks visually cramped.
+fn ensure_blank_before_doxygen_after_end(lines: &[String]) -> Vec<String> {
+    let mut result: Vec<String> = Vec::with_capacity(lines.len());
+
+    for line in lines {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("!>") {
+            // Check if the previous non-blank line is a major end block
+            if let Some(prev) = result.last() {
+                if !prev.trim().is_empty() && is_major_end_block(prev) {
+                    result.push(String::new());
+                }
+            }
+        }
         result.push(line.clone());
     }
 

@@ -56,6 +56,11 @@ fn test_blank_lines() {
 }
 
 #[test]
+fn test_doxygen_spacing() {
+    run_fixture("doxygen_spacing");
+}
+
+#[test]
 fn test_idempotent_simple() {
     let fixture_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
     let input = fs::read_to_string(fixture_dir.join("simple.input.fpp")).unwrap();
