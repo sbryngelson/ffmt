@@ -128,7 +128,7 @@ fn find_inline_doxygen(line: &str) -> Option<usize> {
 /// Align `!<` inline Doxygen comments in a group of declaration lines.
 /// Lines with `!<` get padded so all `!<` start at the same column.
 /// Lines without `!<` are left unchanged.
-fn align_inline_comments(lines: &mut [String]) {
+fn align_inline_comments(lines: &mut [String], line_length: usize) {
     // Count how many lines have !< comments
     let comment_count = lines.iter().filter(|l| find_inline_doxygen(l).is_some()).count();
     if comment_count < 2 {
@@ -147,6 +147,36 @@ fn align_inline_comments(lines: &mut [String]) {
         }
     }
 
+    // Check if aligning would push any line past the line length limit.
+    // If so, reduce max_code_len or skip alignment for lines that would overflow.
+    // Strategy: find the max aligned length; if any line would exceed line_length, fall back
+    // to minimal spacing (1 space before !<) for all lines.
+    let mut would_overflow = false;
+    for line in lines.iter() {
+        if let Some(pos) = find_inline_doxygen(line) {
+            let comment = &line[pos..];
+            // aligned line = max_code_len + 1 (space) + comment.len()
+            let aligned_len = max_code_len + 1 + comment.len();
+            if aligned_len > line_length {
+                would_overflow = true;
+                break;
+            }
+        }
+    }
+
+    if would_overflow {
+        // Fall back to minimal spacing: just ensure 1 space before !<
+        for line in lines.iter_mut() {
+            if let Some(pos) = find_inline_doxygen(line) {
+                let before = &line[..pos];
+                let comment = &line[pos..];
+                let trimmed_before = before.trim_end();
+                *line = format!("{} {}", trimmed_before, comment);
+            }
+        }
+        return;
+    }
+
     // Re-align each line that has !<
     for line in lines.iter_mut() {
         if let Some(pos) = find_inline_doxygen(line) {
@@ -162,7 +192,7 @@ fn align_inline_comments(lines: &mut [String]) {
 /// Align `::` in consecutive declaration lines.
 /// If `compact` is true, also remove blank lines between declarations in a group.
 /// If `align_comments` is true, also align `!<` inline comments within groups.
-pub fn align_declarations(lines: &[String], compact: bool, align_comments: bool) -> Vec<String> {
+pub fn align_declarations(lines: &[String], compact: bool, align_comments: bool, line_length: usize) -> Vec<String> {
     let mut result = lines.to_vec();
     let mut i = 0;
 
@@ -268,7 +298,7 @@ pub fn align_declarations(lines: &[String], compact: bool, align_comments: bool)
 
             // Align !< inline comments within the group
             if align_comments {
-                align_inline_comments(&mut result[group_start..group_end]);
+                align_inline_comments(&mut result[group_start..group_end], line_length);
             }
         }
 
@@ -290,7 +320,7 @@ mod tests {
             "    real(wp) :: y".into(),
             "    character(len=100) :: z".into(),
         ];
-        let result = align_declarations(&input, false, true);
+        let result = align_declarations(&input, false, true, 132);
         assert_eq!(result[0], "    integer            :: x");
         assert_eq!(result[1], "    real(wp)           :: y");
         assert_eq!(result[2], "    character(len=100) :: z");
@@ -299,7 +329,7 @@ mod tests {
     #[test]
     fn test_no_alignment_single_line() {
         let input: Vec<String> = vec!["    integer :: x".into()];
-        let result = align_declarations(&input, false, true);
+        let result = align_declarations(&input, false, true, 132);
         assert_eq!(result[0], "    integer :: x");
     }
 
@@ -310,7 +340,7 @@ mod tests {
             "".into(),
             "    real(wp) :: y".into(),
         ];
-        let result = align_declarations(&input, false, true);
+        let result = align_declarations(&input, false, true, 132);
         // No alignment since blank line separates them
         assert_eq!(result[0], "    integer :: x");
         assert_eq!(result[1], "");
@@ -323,7 +353,7 @@ mod tests {
             "    integer :: x".into(),
             "        real(wp) :: y".into(),
         ];
-        let result = align_declarations(&input, false, true);
+        let result = align_declarations(&input, false, true, 132);
         // Different indentation, no alignment
         assert_eq!(result[0], "    integer :: x");
         assert_eq!(result[1], "        real(wp) :: y");
@@ -336,7 +366,7 @@ mod tests {
             "    x = 1".into(),
             "    real(wp) :: y".into(),
         ];
-        let result = align_declarations(&input, false, true);
+        let result = align_declarations(&input, false, true, 132);
         assert_eq!(result[0], "    integer :: x");
         assert_eq!(result[1], "    x = 1");
         assert_eq!(result[2], "    real(wp) :: y");
@@ -348,7 +378,7 @@ mod tests {
             "    real(wp), allocatable, dimension(:,:,:) :: var".into(),
             "    integer :: n".into(),
         ];
-        let result = align_declarations(&input, false, true);
+        let result = align_declarations(&input, false, true, 132);
         assert_eq!(
             result[0],
             "    real(wp), allocatable, dimension(:,:,:) :: var"
@@ -365,7 +395,7 @@ mod tests {
             "    integer :: x".into(),
             "    real    :: y".into(),
         ];
-        let result = align_declarations(&input, false, true);
+        let result = align_declarations(&input, false, true, 132);
         assert_eq!(result[0], "    integer :: x");
         assert_eq!(result[1], "    real    :: y");
     }
@@ -376,7 +406,7 @@ mod tests {
             "    type(scalar_field) :: sf".into(),
             "    logical :: flag".into(),
         ];
-        let result = align_declarations(&input, false, true);
+        let result = align_declarations(&input, false, true, 132);
         assert_eq!(result[0], "    type(scalar_field) :: sf");
         assert_eq!(result[1], "    logical            :: flag");
     }
@@ -388,7 +418,7 @@ mod tests {
             "    @:ALLOCATE(x)".into(),
             "    real :: y".into(),
         ];
-        let result = align_declarations(&input, false, true);
+        let result = align_declarations(&input, false, true, 132);
         // Fypp line breaks the group
         assert_eq!(result[0], "    integer :: x");
         assert_eq!(result[2], "    real :: y");
@@ -400,7 +430,7 @@ mod tests {
             "    integer :: x = 0".into(),
             "    real(wp) :: y = 1.0_wp".into(),
         ];
-        let result = align_declarations(&input, false, true);
+        let result = align_declarations(&input, false, true, 132);
         assert_eq!(result[0], "    integer  :: x = 0");
         assert_eq!(result[1], "    real(wp) :: y = 1.0_wp");
     }
@@ -412,7 +442,7 @@ mod tests {
             "    private; public :: s_foo".into(),
             "    integer :: x".into(),
         ];
-        let result = align_declarations(&input, false, true);
+        let result = align_declarations(&input, false, true, 132);
         // "private" doesn't start with a type keyword, so no grouping
         assert_eq!(result[0], "    private; public :: s_foo");
         assert_eq!(result[1], "    integer :: x");
@@ -425,7 +455,7 @@ mod tests {
             "    ! a comment".into(),
             "    real :: y".into(),
         ];
-        let result = align_declarations(&input, false, true);
+        let result = align_declarations(&input, false, true, 132);
         // Comment is not a declaration, breaks the group
         assert_eq!(result[0], "    integer :: x");
         assert_eq!(result[2], "    real :: y");
@@ -438,7 +468,7 @@ mod tests {
             "    real(wp), parameter  :: dflt_real = -1.e6_wp                !< Default real value".into(),
             "    real(wp), parameter  :: sgm_eps = 1.e-16_wp               !< Segmentation tolerance".into(),
         ];
-        let result = align_declarations(&input, false, true);
+        let result = align_declarations(&input, false, true, 132);
         // All !< should be at the same column
         let pos0 = result[0].find("!<").unwrap();
         let pos1 = result[1].find("!<").unwrap();
@@ -454,7 +484,7 @@ mod tests {
             "    integer, parameter :: num_patches_max = 1000".into(),
             "    integer, parameter :: y = 2 !< Third".into(),
         ];
-        let result = align_declarations(&input, false, true);
+        let result = align_declarations(&input, false, true, 132);
         // Lines with !< should align; line without !< is unchanged (except :: alignment)
         let pos0 = result[0].find("!<").unwrap();
         let pos2 = result[2].find("!<").unwrap();
@@ -469,7 +499,7 @@ mod tests {
             "    integer :: x !< Only one comment".into(),
             "    integer :: y".into(),
         ];
-        let result = align_declarations(&input, false, true);
+        let result = align_declarations(&input, false, true, 132);
         // Only 1 line has !<, so no alignment needed — just :: alignment
         assert!(result[0].contains("!<"));
     }

@@ -415,7 +415,7 @@ pub fn format_with_config(
     }
 
     // Align :: in consecutive declaration lines
-    if config.align_declarations { output_lines = crate::align::align_declarations(&output_lines, config.compact_declarations, config.align_comments); }
+    if config.align_declarations { output_lines = crate::align::align_declarations(&output_lines, config.compact_declarations, config.align_comments, config.line_length); }
 
     let mut result = output_lines.join("\n");
     if !result.is_empty() && !result.ends_with('\n') {
