@@ -969,6 +969,9 @@ fn remove_blanks_before_closers(lines: &[String]) -> Vec<String> {
             || trimmed.starts_with("#:for ")
             || trimmed.starts_with("#:call ")
             || trimmed.starts_with("#:def ")
+            || trimmed.starts_with("#ifdef")
+            || trimmed.starts_with("#ifndef")
+            || trimmed.starts_with("#if ")
             || is_doxygen_opener);
 
         prev_was_opener = is_opener;
@@ -1335,23 +1338,24 @@ fn rewrap_fypp_line(line: &str, max_length: usize) -> Vec<String> {
 
     for &comma_end in &comma_positions {
         
+        // +2 accounts for trailing " &" on non-last lines
         let current_len = if result.is_empty() {
-            indent + comma_end
+            indent + comma_end + 2
         } else {
-            cont_with_amp.len() + (comma_end - chunk_start)
+            cont_with_amp.len() + (comma_end - chunk_start) + 2
         };
 
         if current_len > max_length && chunk_start < comma_end {
-            // Find the last comma that fits
+            // Find the last comma that fits (including trailing " &")
             let mut best_break = chunk_start;
             for &cp in &comma_positions {
                 if cp <= chunk_start {
                     continue;
                 }
                 let len_with_break = if result.is_empty() {
-                    indent + cp
+                    indent + cp + 2
                 } else {
-                    cont_with_amp.len() + (cp - chunk_start)
+                    cont_with_amp.len() + (cp - chunk_start) + 2
                 };
                 if len_with_break <= max_length {
                     best_break = cp;
