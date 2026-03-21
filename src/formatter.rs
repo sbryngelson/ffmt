@@ -410,8 +410,8 @@ pub fn format_with_config(
     // Remove blank lines immediately before block closers/continuations
     output_lines = remove_blanks_before_closers(&output_lines);
 
-    // Ensure a blank line between major block closers and Doxygen comments
-    output_lines = ensure_blank_before_doxygen_after_end(&output_lines);
+    // Ensure blank lines after major block closers (before Doxygen, before end module, etc.)
+    output_lines = ensure_blank_after_end(&output_lines);
 
     // Re-wrap !< inline Doxygen comments with !! continuations (before compaction/alignment)
     if config.rewrap_comments {
@@ -946,20 +946,34 @@ fn is_major_end_block(line: &str) -> bool {
     re.is_match(&trimmed)
 }
 
-/// Ensure a blank line between major block closers and `!>` Doxygen block comments.
-/// Without this, `end subroutine` followed immediately by `!>` for the next procedure
-/// looks visually cramped.
-fn ensure_blank_before_doxygen_after_end(lines: &[String]) -> Vec<String> {
+/// Check if a line is `end subroutine` or `end function`.
+fn is_end_procedure_line(line: &str) -> bool {
+    let lower = line.trim().to_ascii_lowercase();
+    lower.starts_with("end subroutine") || lower.starts_with("end function")
+}
+
+/// Check if a line is `end module`, `end submodule`, or `end program`.
+fn is_end_enclosing_block(line: &str) -> bool {
+    let lower = line.trim().to_ascii_lowercase();
+    lower.starts_with("end module") || lower.starts_with("end submodule") || lower.starts_with("end program")
+}
+
+/// Ensure blank lines after major block closers where needed:
+/// 1. Between major block closers and `!>` Doxygen block comments
+/// 2. Between `end subroutine`/`end function` and `end module`/`end program`
+fn ensure_blank_after_end(lines: &[String]) -> Vec<String> {
     let mut result: Vec<String> = Vec::with_capacity(lines.len());
 
     for line in lines {
-        let trimmed = line.trim_start();
-        if trimmed.starts_with("!>") {
-            // Check if the previous non-blank line is a major end block
-            if let Some(prev) = result.last() {
-                if !prev.trim().is_empty() && is_major_end_block(prev) {
-                    result.push(String::new());
-                }
+        if let Some(prev) = result.last().filter(|p| !p.trim().is_empty()) {
+            let trimmed = line.trim_start();
+            let needs_blank =
+                // !> after a major end block
+                (trimmed.starts_with("!>") && is_major_end_block(prev))
+                // end module/program after end subroutine/function
+                || (is_end_enclosing_block(line) && is_end_procedure_line(prev));
+            if needs_blank {
+                result.push(String::new());
             }
         }
         result.push(line.clone());

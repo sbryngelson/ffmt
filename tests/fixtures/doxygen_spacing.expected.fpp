@@ -24,4 +24,5 @@ contains
         integer :: w
         w = 4
     end subroutine s_fourth
+
 end module m_test

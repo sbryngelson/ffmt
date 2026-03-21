@@ -16,4 +16,5 @@ contains
             y = y + x
         end do
     end subroutine s_foo
+
 end module m_test
