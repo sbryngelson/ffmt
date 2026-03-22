@@ -435,7 +435,8 @@ pub fn format_with_config(
     if config.rewrap_code {
         let mut final_lines: Vec<String> = Vec::new();
         for line in &output_lines {
-            if line.len() > config.line_length && find_inline_doxygen_in_line(line).is_none() {
+            if line.len() > config.line_length && find_inline_doxygen_in_line(line).is_none()
+                && !line.trim_end().ends_with('&') {
                 final_lines.extend(rewrap_line(line, config.line_length, config.indent_width));
             } else {
                 final_lines.push(line.clone());
@@ -1552,10 +1553,27 @@ fn rewrap_line(line: &str, max_length: usize, indent_width: usize) -> Vec<String
         return vec![line.to_string()];
     }
 
-    // Align continuation lines with opening paren if present,
-    // otherwise use flat indent (one indent_width deeper).
-    let paren_col = content.find('(').map(|p| indent + p + 1);
-    let cont_indent = paren_col.unwrap_or(indent + indent_width);
+    // Align continuation with opening paren (string-aware), capped to avoid extreme indentation
+    let flat_indent = indent + indent_width;
+    let paren_col = {
+        let mut in_str = false;
+        let mut qch = b' ';
+        let mut found = None;
+        let cb = content.as_bytes();
+        for i in 0..cb.len() {
+            if in_str {
+                if cb[i] == qch { if i + 1 < cb.len() && cb[i + 1] == qch { continue; } in_str = false; }
+                continue;
+            }
+            if cb[i] == b'\'' || cb[i] == b'"' { in_str = true; qch = cb[i]; continue; }
+            if cb[i] == b'(' { found = Some(indent + i + 1); break; }
+        }
+        found
+    };
+    let cont_indent = match paren_col {
+        Some(col) if col <= indent + 40 => col,
+        _ => flat_indent,
+    };
     let cont_prefix = " ".repeat(cont_indent);
 
     // Available width: max_length minus indent minus " &" suffix
@@ -1608,13 +1626,26 @@ fn rewrap_line(line: &str, max_length: usize, indent_width: usize) -> Vec<String
         } else if last_other > 0 {
             last_other
         } else {
-            // No break point found — emit as-is (over-length)
-            if is_first {
-                result.push(format!("{}{}", " ".repeat(indent), remaining));
-            } else {
-                result.push(format!("{}& {}", cont_prefix, remaining));
+            // No break within limit — find first comma AFTER limit (long string literal)
+            let mut first_comma_after = 0usize;
+            for &(bp, kind) in &breaks {
+                if bp <= pos { continue; }
+                if matches!(kind, BreakKind::Comma) {
+                    first_comma_after = bp - pos;
+                    break;
+                }
             }
-            break;
+            if first_comma_after > 0 {
+                first_comma_after
+            } else {
+                // No break point at all — emit as-is
+                if is_first {
+                    result.push(format!("{}{}", " ".repeat(indent), remaining));
+                } else {
+                    result.push(format!("{}& {}", cont_prefix, remaining));
+                }
+                break;
+            }
         };
 
         let chunk = content[pos..pos + best_break].trim_end();
