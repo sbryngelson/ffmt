@@ -1239,10 +1239,9 @@ fn ensure_two_spaces_before_inline_comment(lines: &[String]) -> Vec<String> {
             } else if bytes[i] == b'!' {
                 // Found inline comment. Check spacing before it.
                 if i == 0 { return line.clone(); } // standalone comment
-                // Skip directives (!$acc, !$omp) and Doxygen handled by alignment (!<, !!<, !>)
+                // Skip directives (!$acc, !$omp), standalone Doxygen (!>), and !! continuations
                 let rest = &line[i..];
-                if rest.starts_with("!$") || rest.starts_with("!<")
-                    || rest.starts_with("!>") || rest.starts_with("!!") {
+                if rest.starts_with("!$") || rest.starts_with("!>") || rest.starts_with("!!") {
                     return line.clone();
                 }
                 // Count spaces before the `!`
