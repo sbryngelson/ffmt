@@ -447,6 +447,10 @@ pub fn format_with_config(
     // Align :: in consecutive declaration lines
     if config.align_declarations { output_lines = crate::align::align_declarations(&output_lines, config.compact_declarations, config.align_comments, config.line_length); }
 
+    // Ensure at least 2 spaces before inline comments (Fortitude S102)
+    // Runs after alignment so !< comments are already positioned
+    output_lines = ensure_two_spaces_before_inline_comment(&output_lines);
+
     let mut result = output_lines.join("\n");
     if !result.is_empty() && !result.ends_with('\n') {
         result.push('\n');
@@ -1198,6 +1202,62 @@ fn is_declaration_line(line: &str) -> bool {
         }
     }
     false
+}
+
+/// Ensure at least 2 spaces before inline `!` comments on code lines.
+/// This satisfies Fortitude rule S102. Only applies to lines that have both
+/// code and a trailing comment (not standalone comment lines, not `!$` directives,
+/// not `!>` or `!<` Doxygen, not Fypp lines).
+fn ensure_two_spaces_before_inline_comment(lines: &[String]) -> Vec<String> {
+    lines.iter().map(|line| {
+        let trimmed = line.trim_start();
+        // Skip blank lines, standalone comments, preprocessor, Fypp
+        if trimmed.is_empty() || trimmed.starts_with('!') || trimmed.starts_with('#')
+            || trimmed.starts_with("$:") || trimmed.starts_with("@:") {
+            return line.clone();
+        }
+        // Find the inline comment position (! outside strings)
+        let bytes = line.as_bytes();
+        let mut in_string = false;
+        let mut delim = b' ';
+        for i in 0..bytes.len() {
+            if in_string {
+                if bytes[i] == delim {
+                    // Check for doubled quote escape
+                    if i + 1 < bytes.len() && bytes[i + 1] == delim {
+                        continue; // skip
+                    }
+                    in_string = false;
+                }
+            } else if bytes[i] == b'\'' || bytes[i] == b'"' {
+                in_string = true;
+                delim = bytes[i];
+            } else if bytes[i] == b'!' {
+                // Found inline comment. Check spacing before it.
+                if i == 0 { return line.clone(); } // standalone comment
+                // Skip directives (!$acc, !$omp) and Doxygen handled by alignment (!<, !!<, !>)
+                let rest = &line[i..];
+                if rest.starts_with("!$") || rest.starts_with("!<")
+                    || rest.starts_with("!>") || rest.starts_with("!!") {
+                    return line.clone();
+                }
+                // Count spaces before the `!`
+                let mut spaces = 0;
+                let mut j = i;
+                while j > 0 && bytes[j - 1] == b' ' {
+                    spaces += 1;
+                    j -= 1;
+                }
+                if j == 0 { return line.clone(); } // all spaces before ! = standalone
+                if spaces >= 2 { return line.clone(); } // already ok
+                // Add spaces to reach 2, but only if it won't exceed line_length
+                let code_part = &line[..i].trim_end();
+                let comment_part = &line[i..];
+                return format!("{}  {}", code_part, comment_part);
+            }
+        }
+        line.clone()
+    }).collect()
 }
 
 /// Ensure a blank line between the last declaration and the first executable statement

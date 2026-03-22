@@ -167,7 +167,7 @@ fn align_inline_comments(lines: &mut [String], line_length: usize) {
         if let Some(pos) = find_inline_doxygen(line) {
             if !has_doxygen_text(line, pos) { continue; }
             let comment = &line[pos..];
-            let aligned_len = max_code_len + 1 + comment.len();
+            let aligned_len = max_code_len + 2 + comment.len();
             if aligned_len > line_length {
                 would_overflow = true;
                 break;
@@ -176,14 +176,14 @@ fn align_inline_comments(lines: &mut [String], line_length: usize) {
     }
 
     if would_overflow {
-        // Fall back to minimal spacing: just ensure 1 space before !<
+        // Fall back to minimal spacing: ensure 2 spaces before !<
         for line in lines.iter_mut() {
             if let Some(pos) = find_inline_doxygen(line) {
                 if !has_doxygen_text(line, pos) { continue; }
                 let before = &line[..pos];
                 let comment = &line[pos..];
                 let trimmed_before = before.trim_end();
-                *line = format!("{} {}", trimmed_before, comment);
+                *line = format!("{}  {}", trimmed_before, comment);
             }
         }
         return;
@@ -196,8 +196,8 @@ fn align_inline_comments(lines: &mut [String], line_length: usize) {
             let before = &line[..pos];
             let comment = &line[pos..];
             let trimmed_before = before.trim_end();
-            let padding = max_code_len - trimmed_before.len();
-            *line = format!("{}{} {}", trimmed_before, " ".repeat(padding), comment);
+            let padding = max_code_len + 2 - trimmed_before.len();
+            *line = format!("{}{}{}", trimmed_before, " ".repeat(padding), comment);
         }
     }
 }
