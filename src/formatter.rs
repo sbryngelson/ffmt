@@ -451,6 +451,9 @@ pub fn format_with_config(
     // Runs after alignment so !< comments are already positioned
     output_lines = ensure_two_spaces_before_inline_comment(&output_lines);
 
+    // Strip trailing semicolons (Fortitude S081)
+    output_lines = strip_trailing_semicolons(&output_lines);
+
     let mut result = output_lines.join("\n");
     if !result.is_empty() && !result.ends_with('\n') {
         result.push('\n');
@@ -1254,6 +1257,53 @@ fn ensure_two_spaces_before_inline_comment(lines: &[String]) -> Vec<String> {
                 let code_part = &line[..i].trim_end();
                 let comment_part = &line[i..];
                 return format!("{}  {}", code_part, comment_part);
+            }
+        }
+        line.clone()
+    }).collect()
+}
+
+/// Strip trailing semicolons from lines (Fortitude S081).
+/// Removes `;` at the end of a line (before any trailing comment), but only if
+/// it's truly trailing — not between statements on the same line.
+fn strip_trailing_semicolons(lines: &[String]) -> Vec<String> {
+    lines.iter().map(|line| {
+        let trimmed = line.trim_start();
+        // Skip blank, comment-only, preprocessor, Fypp lines
+        if trimmed.is_empty() || trimmed.starts_with('!') || trimmed.starts_with('#')
+            || trimmed.starts_with("$:") || trimmed.starts_with("@:") {
+            return line.clone();
+        }
+        // Find the code portion (before any inline comment)
+        let bytes = line.as_bytes();
+        let mut in_string = false;
+        let mut delim = b' ';
+        let mut comment_start = bytes.len();
+        for i in 0..bytes.len() {
+            if in_string {
+                if bytes[i] == delim {
+                    if i + 1 < bytes.len() && bytes[i + 1] == delim {
+                        continue;
+                    }
+                    in_string = false;
+                }
+            } else if bytes[i] == b'\'' || bytes[i] == b'"' {
+                in_string = true;
+                delim = bytes[i];
+            } else if bytes[i] == b'!' {
+                comment_start = i;
+                break;
+            }
+        }
+        let code = &line[..comment_start];
+        let comment = &line[comment_start..];
+        let code_trimmed = code.trim_end();
+        if code_trimmed.ends_with(';') {
+            let stripped = code_trimmed.strip_suffix(';').unwrap().trim_end();
+            if comment.is_empty() {
+                return format!("{}{}", &line[..line.len() - line.trim_start().len()], stripped.trim_start());
+            } else {
+                return format!("{}  {}", stripped, comment.trim_start());
             }
         }
         line.clone()
