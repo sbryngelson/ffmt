@@ -137,10 +137,7 @@ fn test_normalize_keywords_false() {
 
 #[test]
 fn test_normalize_keywords_preserve() {
-    let result = format_with_config(
-        "normalize-keywords = \"preserve\"\n",
-        "enddo\nend do\n",
-    );
+    let result = format_with_config("normalize-keywords = \"preserve\"\n", "enddo\nend do\n");
     assert!(
         result.contains("enddo"),
         "enddo should be preserved, got: {result}"
@@ -175,10 +172,7 @@ fn test_toggle_accepts_string_enable() {
 
 #[test]
 fn test_ffmt_off_on() {
-    let result = format_with_config(
-        "",
-        "x = 1\n! ffmt off\ny    =    2\n! ffmt on\nz = 3\n",
-    );
+    let result = format_with_config("", "x = 1\n! ffmt off\ny    =    2\n! ffmt on\nz = 3\n");
     assert!(
         result.contains("y    =    2"),
         "Code between ffmt off/on should be preserved, got: {result}"
@@ -187,10 +181,7 @@ fn test_ffmt_off_on() {
 
 #[test]
 fn test_ffmt_off_on_case_insensitive() {
-    let result = format_with_config(
-        "",
-        "x = 1\n! FFMT OFF\ny    =    2\n! FFMT ON\nz = 3\n",
-    );
+    let result = format_with_config("", "x = 1\n! FFMT OFF\ny    =    2\n! FFMT ON\nz = 3\n");
     assert!(
         result.contains("y    =    2"),
         "ffmt off should be case-insensitive, got: {result}"
@@ -199,10 +190,7 @@ fn test_ffmt_off_on_case_insensitive() {
 
 #[test]
 fn test_ffmt_off_colon_variant() {
-    let result = format_with_config(
-        "",
-        "x = 1\n! ffmt: off\ny    =    2\n! ffmt: on\nz = 3\n",
-    );
+    let result = format_with_config("", "x = 1\n! ffmt: off\ny    =    2\n! ffmt: on\nz = 3\n");
     assert!(
         result.contains("y    =    2"),
         "ffmt: off variant should work, got: {result}"
@@ -343,10 +331,7 @@ fn test_split_statements_on() {
 
 #[test]
 fn test_split_statements_preserves_private_public() {
-    let result = format_with_config(
-        "split-statements = true",
-        "private; public :: s_foo\n",
-    );
+    let result = format_with_config("split-statements = true", "private; public :: s_foo\n");
     assert!(
         result.contains("private; public"),
         "private; public :: should be preserved, got: {result}"
@@ -457,19 +442,13 @@ fn test_use_formatting_off_default() {
 
 #[test]
 fn test_align_assignments_on() {
-    let result = format_with_config(
-        "align-assignments = true",
-        "x = 1\nlong_var = 2\ny = 3\n",
-    );
+    let result = format_with_config("align-assignments = true", "x = 1\nlong_var = 2\ny = 3\n");
     // All = should be at the same column
     let lines: Vec<&str> = result.lines().filter(|l| l.contains('=')).collect();
     if lines.len() >= 2 {
         let pos0 = lines[0].find('=').unwrap();
         let pos1 = lines[1].find('=').unwrap();
-        assert_eq!(
-            pos0, pos1,
-            "= signs should be aligned, got: {result}"
-        );
+        assert_eq!(pos0, pos1, "= signs should be aligned, got: {result}");
     }
 }
 
