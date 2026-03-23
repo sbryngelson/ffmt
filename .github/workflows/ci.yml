@@ -12,6 +12,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - run: cargo fmt --check
       - run: cargo test
       - run: cargo clippy -- -D warnings
 
@@ -162,6 +165,26 @@ jobs:
           if [ "${{ matrix.target }}" = "gpu-omp" ]; then GPU_FLAG="--gpu mp"; fi
           JOBS=${{ matrix.target == 'cpu' && '$(nproc)' || '2' }}
           ./mfc.sh build -j $JOBS $GPU_FLAG
+
+  docs:
+    name: Documentation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install docs dependencies
+        run: pip install mkdocs-material
+
+      - name: Build documentation
+        run: mkdocs build --strict
+
+      - name: Lint Markdown
+        uses: DavidAnson/markdownlint-cli2-action@v19
+        with:
+          globs: "docs/**/*.md,README.md"
 
   build-wheels:
     name: Build wheels (${{ matrix.os }})
