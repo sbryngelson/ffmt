@@ -1,6 +1,6 @@
 site_name: ffmt
 site_description: A fast, configurable Fortran formatter
-site_url: https://ffmt.readthedocs.io
+site_url: https://ffmt-fortran.readthedocs.io
 repo_url: https://github.com/sbryngelson/ffmt
 repo_name: sbryngelson/ffmt
 

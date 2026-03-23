@@ -4,11 +4,11 @@
 [![CI](https://github.com/sbryngelson/ffmt/actions/workflows/ci.yml/badge.svg)](https://github.com/sbryngelson/ffmt/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![GitHub Marketplace](https://img.shields.io/badge/Marketplace-ffmt-blue?logo=github)](https://github.com/marketplace/actions/ffmt-fortran-formatter)
-[![Docs](https://readthedocs.org/projects/ffmt/badge/?version=latest)](https://ffmt.readthedocs.io)
+[![Docs](https://readthedocs.org/projects/ffmt-fortran/badge/?version=latest)](https://ffmt-fortran.readthedocs.io)
 
 A fast, configurable Fortran formatter with support for Fypp, Doxygen, and OpenACC/OpenMP directives. Written in Rust. Installable via `pip`.
 
-**[Documentation](https://ffmt.readthedocs.io)** | **[Configuration](https://ffmt.readthedocs.io/en/latest/configuration/)** | **[Changelog](https://github.com/sbryngelson/ffmt/releases)**
+**[Documentation](https://ffmt-fortran.readthedocs.io)** | **[Configuration](https://ffmt-fortran.readthedocs.io/en/latest/configuration/)** | **[Changelog](https://github.com/sbryngelson/ffmt/releases)**
 
 ## Installation
 
@@ -40,7 +40,7 @@ cat file.fpp | ffmt -            # stdin/stdout
 - **Preprocessor** -- Fypp (`#:if`, `$:`, `@:`), C preprocessor (`#ifdef`), OpenACC (`!$acc`), OpenMP (`!$omp`)
 - **Opt-in** -- multi-statement splitting, assignment alignment, `&` column alignment, use-statement reformatting
 
-Most options accept `true`, `false`, or `"preserve"`. See the [configuration reference](https://ffmt.readthedocs.io/en/latest/configuration/) for all options.
+Most options accept `true`, `false`, or `"preserve"`. See the [configuration reference](https://ffmt-fortran.readthedocs.io/en/latest/configuration/) for all options.
 
 ## Configuration
 
