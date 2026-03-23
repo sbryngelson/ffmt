@@ -32,12 +32,12 @@ macro_rules! re {
 
 /// Classify a Fypp line (starts with `#:` or `#!`).
 fn classify_fypp(trimmed: &str) -> LineKind {
-    let re_block_open =
-        re!(FYPP_OPEN, r"(?i)^#:\s*(if|for|def|call|block|mute)\b");
-    let re_block_close =
-        re!(FYPP_CLOSE, r"(?i)^#:\s*(endif|endfor|enddef|endcall|endblock|endmute)\b");
-    let re_continuation =
-        re!(FYPP_CONT, r"(?i)^#:\s*(elif|else)\b");
+    let re_block_open = re!(FYPP_OPEN, r"(?i)^#:\s*(if|for|def|call|block|mute)\b");
+    let re_block_close = re!(
+        FYPP_CLOSE,
+        r"(?i)^#:\s*(endif|endfor|enddef|endcall|endblock|endmute)\b"
+    );
+    let re_continuation = re!(FYPP_CONT, r"(?i)^#:\s*(elif|else)\b");
 
     if re_block_close.is_match(trimmed) {
         LineKind::FyppBlockClose
@@ -131,13 +131,42 @@ fn classify_fortran(trimmed: &str) -> LineKind {
             let label_word = candidate.split(':').next().unwrap().trim();
             // If the label word is a Fortran keyword, don't strip it
             let keywords = [
-                "if", "do", "else", "end", "type", "class", "select", "case",
-                "where", "block", "associate", "critical", "enum", "forall",
-                "module", "program", "subroutine", "function", "interface",
-                "submodule", "use", "implicit", "contains", "rank",
-                "elsewhere", "pure", "elemental", "impure", "recursive",
-                "integer", "real", "character", "logical", "complex",
-                "double", "change",
+                "if",
+                "do",
+                "else",
+                "end",
+                "type",
+                "class",
+                "select",
+                "case",
+                "where",
+                "block",
+                "associate",
+                "critical",
+                "enum",
+                "forall",
+                "module",
+                "program",
+                "subroutine",
+                "function",
+                "interface",
+                "submodule",
+                "use",
+                "implicit",
+                "contains",
+                "rank",
+                "elsewhere",
+                "pure",
+                "elemental",
+                "impure",
+                "recursive",
+                "integer",
+                "real",
+                "character",
+                "logical",
+                "complex",
+                "double",
+                "change",
             ];
             if keywords.iter().any(|k| k.eq_ignore_ascii_case(label_word)) {
                 trimmed
@@ -186,7 +215,9 @@ fn classify_fortran(trimmed: &str) -> LineKind {
     if re_type_is.is_match(line) {
         return LineKind::FortranContinuation;
     }
-    if lower == "class default" || lower.starts_with("class default") && lower[13..].trim().is_empty() {
+    if lower == "class default"
+        || lower.starts_with("class default") && lower[13..].trim().is_empty()
+    {
         return LineKind::FortranContinuation;
     }
     // rank (...) or rank default
@@ -246,7 +277,10 @@ fn classify_fortran(trimmed: &str) -> LineKind {
     }
 
     // subroutine
-    let re_sub = re!(SUB, r"(?i)^(((pure|elemental|impure|recursive|module)\s+)*)subroutine\b");
+    let re_sub = re!(
+        SUB,
+        r"(?i)^(((pure|elemental|impure|recursive|module)\s+)*)subroutine\b"
+    );
     if re_sub.is_match(line) {
         // But "module procedure" is a statement, not an opener
         // subroutine is always an opener
@@ -518,7 +552,10 @@ pub fn end_block_keyword(line: &str) -> Option<&str> {
     if trimmed.len() < 3 {
         return None;
     }
-    let prefix: String = lower_bytes[..3].iter().map(|&b| b.to_ascii_lowercase() as char).collect();
+    let prefix: String = lower_bytes[..3]
+        .iter()
+        .map(|&b| b.to_ascii_lowercase() as char)
+        .collect();
     if prefix != "end" {
         return None;
     }
@@ -529,7 +566,9 @@ pub fn end_block_keyword(line: &str) -> Option<&str> {
     }
 
     // Get the keyword (first word after "end")
-    let keyword_end = rest.find(|c: char| c.is_whitespace() || c == '!').unwrap_or(rest.len());
+    let keyword_end = rest
+        .find(|c: char| c.is_whitespace() || c == '!')
+        .unwrap_or(rest.len());
     let keyword = &rest[..keyword_end];
     let keyword_lower: String = keyword.chars().map(|c| c.to_ascii_lowercase()).collect();
 

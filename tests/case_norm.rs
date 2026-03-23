@@ -18,7 +18,10 @@ fn test_logical_literal() {
 }
 #[test]
 fn test_identifiers_preserved() {
-    assert_eq!(normalize_case("call MySubroutine(X_val)"), "call MySubroutine(X_val)");
+    assert_eq!(
+        normalize_case("call MySubroutine(X_val)"),
+        "call MySubroutine(X_val)"
+    );
 }
 #[test]
 fn test_string_preserved() {
@@ -26,11 +29,17 @@ fn test_string_preserved() {
 }
 #[test]
 fn test_fypp_preserved() {
-    assert_eq!(normalize_case("$:GPU_PARALLEL_LOOP(collapse=3)"), "$:GPU_PARALLEL_LOOP(collapse=3)");
+    assert_eq!(
+        normalize_case("$:GPU_PARALLEL_LOOP(collapse=3)"),
+        "$:GPU_PARALLEL_LOOP(collapse=3)"
+    );
 }
 #[test]
 fn test_comment_preserved() {
-    assert_eq!(normalize_case("x = 1 ! IMPORTANT NOTE"), "x = 1 ! IMPORTANT NOTE");
+    assert_eq!(
+        normalize_case("x = 1 ! IMPORTANT NOTE"),
+        "x = 1 ! IMPORTANT NOTE"
+    );
 }
 #[test]
 fn test_mixed() {
@@ -52,7 +61,10 @@ fn test_at_inline_expression_preserved() {
 }
 #[test]
 fn test_dot_operator_lowered() {
-    assert_eq!(normalize_case("IF (a .AND. b .OR. c) THEN"), "if (a .and. b .or. c) then");
+    assert_eq!(
+        normalize_case("IF (a .AND. b .OR. c) THEN"),
+        "if (a .and. b .or. c) then"
+    );
 }
 #[test]
 fn test_logical_not() {

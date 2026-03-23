@@ -1,9 +1,7 @@
 use ffmt::config::WhitespaceConfig;
 use ffmt::whitespace::{
+    add_keyword_paren_spaces, collapse_double_spaces, normalize_intent_paren,
     normalize_whitespace as normalize_whitespace_raw,
-    add_keyword_paren_spaces,
-    normalize_intent_paren,
-    collapse_double_spaces,
 };
 
 fn normalize_whitespace(line: &str) -> String {
@@ -41,10 +39,7 @@ fn test_assignment_spaces() {
 }
 #[test]
 fn test_keyword_arg_no_spaces() {
-    assert_eq!(
-        normalize_whitespace("call foo(bar = 1)"),
-        "call foo(bar=1)"
-    );
+    assert_eq!(normalize_whitespace("call foo(bar = 1)"), "call foo(bar=1)");
 }
 // --- Pointer/rename ---
 #[test]
@@ -72,10 +67,7 @@ fn test_concat_spaces() {
 // --- Commas ---
 #[test]
 fn test_comma_spacing() {
-    assert_eq!(
-        normalize_whitespace("call f(a,b ,c)"),
-        "call f(a, b, c)"
-    );
+    assert_eq!(normalize_whitespace("call f(a,b ,c)"), "call f(a, b, c)");
 }
 // --- Colons ---
 #[test]
@@ -129,10 +121,7 @@ fn test_unary_minus_after_divide() {
 }
 #[test]
 fn test_unary_minus_after_comma() {
-    assert_eq!(
-        normalize_whitespace("call f(a, -b)"),
-        "call f(a, -b)"
-    );
+    assert_eq!(normalize_whitespace("call f(a, -b)"), "call f(a, -b)");
 }
 #[test]
 fn test_unary_minus_after_paren() {
@@ -224,10 +213,7 @@ fn test_comment_directive_preserved() {
 }
 #[test]
 fn test_comment_doxygen_lt_preserved() {
-    assert_eq!(
-        normalize_whitespace("x = 1 !< doxygen"),
-        "x = 1 !< doxygen"
-    );
+    assert_eq!(normalize_whitespace("x = 1 !< doxygen"), "x = 1 !< doxygen");
 }
 #[test]
 fn test_comment_doxygen_double_bang_no_space() {
@@ -245,10 +231,7 @@ fn test_collapse_double_spaces() {
 }
 #[test]
 fn test_collapse_spaces_in_string_preserved() {
-    assert_eq!(
-        normalize_whitespace("x = 'a  b  c'"),
-        "x = 'a  b  c'"
-    );
+    assert_eq!(normalize_whitespace("x = 'a  b  c'"), "x = 'a  b  c'");
 }
 #[test]
 fn test_collapse_spaces_in_comment_preserved() {

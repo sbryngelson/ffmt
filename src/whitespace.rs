@@ -61,7 +61,11 @@ pub fn normalize_whitespace(line: &str, ws_config: &WhitespaceConfig) -> String 
 
     // Skip whitespace normalization for namelist statements —
     // the / delimiters are not division operators
-    if trimmed.trim_start().to_ascii_lowercase().starts_with("namelist") {
+    if trimmed
+        .trim_start()
+        .to_ascii_lowercase()
+        .starts_with("namelist")
+    {
         return trimmed.to_string();
     }
 
@@ -115,7 +119,7 @@ pub fn add_keyword_paren_spaces(line: &str) -> String {
 
     for m in re.find_iter(line) {
         let paren_pos = m.end() - 1; // position of the (
-        // Skip if inside a string
+                                     // Skip if inside a string
         if string_mask[paren_pos] {
             continue;
         }
@@ -284,10 +288,15 @@ pub fn collapse_double_spaces(line: &str) -> String {
         // For non-ASCII bytes, copy the full UTF-8 character
         if ch > 127 {
             // Find the end of this UTF-8 character
-            let char_len = if ch & 0xE0 == 0xC0 { 2 }
-                else if ch & 0xF0 == 0xE0 { 3 }
-                else if ch & 0xF8 == 0xF0 { 4 }
-                else { 1 };
+            let char_len = if ch & 0xE0 == 0xC0 {
+                2
+            } else if ch & 0xF0 == 0xE0 {
+                3
+            } else if ch & 0xF8 == 0xF0 {
+                4
+            } else {
+                1
+            };
             let end = (i + char_len).min(len);
             result.push_str(&line[i..end]);
             i = end;
@@ -655,10 +664,12 @@ fn tokenize(line: &str) -> Vec<Token> {
                 || c == b';'
             {
                 // Check for dot operator
-                if c == b'.' && i + 2 < len
-                    && matches!(crate::match_dot_token(bytes, i), Some((_, true))) {
-                        break;
-                    }
+                if c == b'.'
+                    && i + 2 < len
+                    && matches!(crate::match_dot_token(bytes, i), Some((_, true)))
+                {
+                    break;
+                }
                 // Check for Fypp inline: ${ or @{
                 if (c == b'$' || c == b'@') && i + 1 < len && bytes[i + 1] == b'{' {
                     break;
@@ -888,9 +899,7 @@ fn trim_trailing_space(out: &mut String) {
 fn needs_trailing_space(token: &Token) -> bool {
     matches!(
         token,
-        Token::Text(_)
-            | Token::Op(OpKind::CloseParen, _)
-            | Token::Op(OpKind::Semicolon, _)
+        Token::Text(_) | Token::Op(OpKind::CloseParen, _) | Token::Op(OpKind::Semicolon, _)
     )
 }
 

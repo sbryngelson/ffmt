@@ -132,15 +132,20 @@ fn find_inline_doxygen(line: &str) -> Option<usize> {
 fn has_doxygen_text(line: &str, pos: usize) -> bool {
     let after = &line[pos..];
     // Skip "!<" and any trailing whitespace
-    let text = if after.len() > 2 { after[2..].trim() } else { "" };
+    let text = if after.len() > 2 {
+        after[2..].trim()
+    } else {
+        ""
+    };
     !text.is_empty()
 }
 
 fn align_inline_comments(lines: &mut [String], line_length: usize) {
     // Count how many lines have !< comments WITH text (not bare !<)
-    let comment_count = lines.iter().filter(|l| {
-        find_inline_doxygen(l).is_some_and(|pos| has_doxygen_text(l, pos))
-    }).count();
+    let comment_count = lines
+        .iter()
+        .filter(|l| find_inline_doxygen(l).is_some_and(|pos| has_doxygen_text(l, pos)))
+        .count();
     if comment_count < 2 {
         return;
     }
@@ -149,7 +154,9 @@ fn align_inline_comments(lines: &mut [String], line_length: usize) {
     let mut max_code_len: usize = 0;
     for line in lines.iter() {
         if let Some(pos) = find_inline_doxygen(line) {
-            if !has_doxygen_text(line, pos) { continue; }
+            if !has_doxygen_text(line, pos) {
+                continue;
+            }
             let before = &line[..pos];
             let trimmed = before.trim_end();
             if trimmed.len() > max_code_len {
@@ -165,7 +172,9 @@ fn align_inline_comments(lines: &mut [String], line_length: usize) {
     let mut would_overflow = false;
     for line in lines.iter() {
         if let Some(pos) = find_inline_doxygen(line) {
-            if !has_doxygen_text(line, pos) { continue; }
+            if !has_doxygen_text(line, pos) {
+                continue;
+            }
             let comment = &line[pos..];
             let aligned_len = max_code_len + 2 + comment.len();
             if aligned_len > line_length {
@@ -179,7 +188,9 @@ fn align_inline_comments(lines: &mut [String], line_length: usize) {
         // Fall back to minimal spacing: ensure 2 spaces before !<
         for line in lines.iter_mut() {
             if let Some(pos) = find_inline_doxygen(line) {
-                if !has_doxygen_text(line, pos) { continue; }
+                if !has_doxygen_text(line, pos) {
+                    continue;
+                }
                 let before = &line[..pos];
                 let comment = &line[pos..];
                 let trimmed_before = before.trim_end();
@@ -192,7 +203,9 @@ fn align_inline_comments(lines: &mut [String], line_length: usize) {
     // Re-align each line that has !< with text (skip bare !<)
     for line in lines.iter_mut() {
         if let Some(pos) = find_inline_doxygen(line) {
-            if !has_doxygen_text(line, pos) { continue; }
+            if !has_doxygen_text(line, pos) {
+                continue;
+            }
             let before = &line[..pos];
             let comment = &line[pos..];
             let trimmed_before = before.trim_end();
@@ -205,7 +218,12 @@ fn align_inline_comments(lines: &mut [String], line_length: usize) {
 /// Align `::` in consecutive declaration lines.
 /// If `compact` is true, also remove blank lines between declarations in a group.
 /// If `align_comments` is true, also align `!<` inline comments within groups.
-pub fn align_declarations(lines: &[String], compact: bool, align_comments: bool, line_length: usize) -> Vec<String> {
+pub fn align_declarations(
+    lines: &[String],
+    compact: bool,
+    align_comments: bool,
+    line_length: usize,
+) -> Vec<String> {
     let mut result = lines.to_vec();
     let mut i = 0;
 
@@ -234,7 +252,9 @@ pub fn align_declarations(lines: &[String], compact: bool, align_comments: bool,
                 // Blank line: if compact, look ahead for more declarations
                 if compact && group_end + 1 < result.len() {
                     let next_t = result[group_end + 1].trim_start();
-                    if is_declaration_line(next_t) && indent_of(&result[group_end + 1]) == group_indent {
+                    if is_declaration_line(next_t)
+                        && indent_of(&result[group_end + 1]) == group_indent
+                    {
                         group_end += 1; // skip blank, continue group
                         continue;
                     }
@@ -306,24 +326,24 @@ pub fn align_declarations(lines: &[String], compact: bool, align_comments: bool,
 
             // Now re-align each line's :: (skip if it would overflow)
             if !would_overflow_colon {
-            for line in &mut result[group_start..group_end] {
-                if let Some(pos) = find_double_colon(line) {
-                    let before_colon = &line[..pos];
-                    let after_colon = &line[pos + 2..]; // after `::`
-                    let trimmed_before = before_colon.trim_end();
-                    let padding = max_pre_colon_len - trimmed_before.len();
+                for line in &mut result[group_start..group_end] {
+                    if let Some(pos) = find_double_colon(line) {
+                        let before_colon = &line[..pos];
+                        let after_colon = &line[pos + 2..]; // after `::`
+                        let trimmed_before = before_colon.trim_end();
+                        let padding = max_pre_colon_len - trimmed_before.len();
 
-                    // Rebuild: trimmed_before + padding spaces + " :: " + after content
-                    let after_trimmed = after_colon.trim_start();
-                    let new_line = format!(
-                        "{}{} :: {}",
-                        trimmed_before,
-                        " ".repeat(padding),
-                        after_trimmed
-                    );
-                    *line = new_line;
+                        // Rebuild: trimmed_before + padding spaces + " :: " + after content
+                        let after_trimmed = after_colon.trim_start();
+                        let new_line = format!(
+                            "{}{} :: {}",
+                            trimmed_before,
+                            " ".repeat(padding),
+                            after_trimmed
+                        );
+                        *line = new_line;
+                    }
                 }
-            }
             } // end if !would_overflow_colon
 
             // Align !< inline comments within the group
@@ -424,10 +444,7 @@ mod tests {
 
     #[test]
     fn test_different_indent_breaks_group() {
-        let input: Vec<String> = vec![
-            "    integer :: x".into(),
-            "        real(wp) :: y".into(),
-        ];
+        let input: Vec<String> = vec!["    integer :: x".into(), "        real(wp) :: y".into()];
         let result = align_declarations(&input, false, true, 132);
         // Different indentation, no alignment
         assert_eq!(result[0], "    integer :: x");
@@ -466,10 +483,7 @@ mod tests {
 
     #[test]
     fn test_already_aligned() {
-        let input: Vec<String> = vec![
-            "    integer :: x".into(),
-            "    real    :: y".into(),
-        ];
+        let input: Vec<String> = vec!["    integer :: x".into(), "    real    :: y".into()];
         let result = align_declarations(&input, false, true, 132);
         assert_eq!(result[0], "    integer :: x");
         assert_eq!(result[1], "    real    :: y");

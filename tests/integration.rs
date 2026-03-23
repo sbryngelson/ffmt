@@ -66,7 +66,10 @@ fn test_idempotent_simple() {
     let input = fs::read_to_string(fixture_dir.join("simple.input.fpp")).unwrap();
     let first = ffmt::format_string(&input);
     let second = ffmt::format_string(&first);
-    assert_eq!(first, second, "Formatter is not idempotent on simple fixture");
+    assert_eq!(
+        first, second,
+        "Formatter is not idempotent on simple fixture"
+    );
 }
 
 #[test]

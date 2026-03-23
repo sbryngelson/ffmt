@@ -41,7 +41,10 @@ impl<'de> Deserialize<'de> for Toggle {
                     "true" | "enable" | "on" | "one-per-line" => Ok(Toggle::Enable),
                     "false" | "disable" | "off" => Ok(Toggle::Disable),
                     "preserve" | "keep" => Ok(Toggle::Preserve),
-                    _ => Err(de::Error::unknown_variant(v, &["true", "false", "preserve"])),
+                    _ => Err(de::Error::unknown_variant(
+                        v,
+                        &["true", "false", "preserve"],
+                    )),
                 }
             }
         }
@@ -328,10 +331,7 @@ fn load_config_file(path: &Path) -> Result<Config, String> {
     let content = std::fs::read_to_string(path)
         .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
 
-    let filename = path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("");
+    let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
     if filename == "pyproject.toml" {
         let pyproject: PyprojectToml = toml::from_str(&content)

@@ -57,8 +57,7 @@ fn read_message(reader: &mut impl BufRead) -> io::Result<Value> {
     let mut body = vec![0u8; content_length];
     reader.read_exact(&mut body)?;
 
-    serde_json::from_slice(&body)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+    serde_json::from_slice(&body).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
 }
 
 fn write_message(writer: &mut impl Write, msg: &Value) {
@@ -130,18 +129,14 @@ fn handle_message(
             None
         }
         "textDocument/didClose" => {
-            let uri = msg["params"]["textDocument"]["uri"]
-                .as_str()
-                .unwrap_or("");
+            let uri = msg["params"]["textDocument"]["uri"].as_str().unwrap_or("");
             documents.remove(uri);
             None
         }
 
         "textDocument/formatting" => {
             let id = &msg["id"];
-            let uri = msg["params"]["textDocument"]["uri"]
-                .as_str()
-                .unwrap_or("");
+            let uri = msg["params"]["textDocument"]["uri"].as_str().unwrap_or("");
 
             if let Some(text) = documents.get(uri) {
                 let formatted = crate::formatter::format_with_config(text, config, None);
@@ -176,15 +171,11 @@ fn handle_message(
 
         "textDocument/rangeFormatting" => {
             let id = &msg["id"];
-            let uri = msg["params"]["textDocument"]["uri"]
-                .as_str()
-                .unwrap_or("");
+            let uri = msg["params"]["textDocument"]["uri"].as_str().unwrap_or("");
             let start_line = msg["params"]["range"]["start"]["line"]
                 .as_u64()
                 .unwrap_or(0) as usize;
-            let end_line = msg["params"]["range"]["end"]["line"]
-                .as_u64()
-                .unwrap_or(0) as usize;
+            let end_line = msg["params"]["range"]["end"]["line"].as_u64().unwrap_or(0) as usize;
 
             if let Some(text) = documents.get(uri) {
                 // LSP lines are 0-based, ffmt range is 1-based

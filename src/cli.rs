@@ -12,11 +12,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 const CACHE_DIR: &str = ".ffmt_cache";
 
 #[derive(Parser)]
-#[command(
-    name = "ffmt",
-    about = "An opinionated Fortran formatter",
-    version
-)]
+#[command(name = "ffmt", about = "An opinionated Fortran formatter", version)]
 struct Args {
     /// Files or directories to format. Use `-` for stdin.
     #[arg(required_unless_present_any = ["lsp", "dump_config"])]
@@ -175,7 +171,8 @@ pub fn run() {
     let no_ignore = args.no_ignore || !config.files.respect_gitignore;
     let mut all_excludes = args.excludes.clone();
     all_excludes.extend(config.files.exclude.clone());
-    let files = discover_files_with_config(&paths, &all_excludes, no_ignore, &config.files.extensions);
+    let files =
+        discover_files_with_config(&paths, &all_excludes, no_ignore, &config.files.extensions);
 
     if files.is_empty() {
         eprintln!("ffmt: no Fortran files found");
@@ -189,10 +186,7 @@ pub fn run() {
         .ok();
 
     // Load cache
-    let cache_dir = args
-        .cache_dir
-        .as_deref()
-        .unwrap_or(CACHE_DIR);
+    let cache_dir = args.cache_dir.as_deref().unwrap_or(CACHE_DIR);
     let mut cache = if args.no_cache || args.check {
         None
     } else {
@@ -201,10 +195,7 @@ pub fn run() {
 
     // Filter files that haven't changed since last format
     let files_to_process: Vec<&PathBuf> = if let Some(ref cache) = cache {
-        files
-            .iter()
-            .filter(|f| !cache.is_cached(f))
-            .collect()
+        files.iter().filter(|f| !cache.is_cached(f)).collect()
     } else {
         files.iter().collect()
     };
@@ -268,12 +259,10 @@ fn parse_range(range_str: &Option<String>) -> Option<(usize, usize)> {
 
 fn run_stdin(args: &Args, color: bool, quiet: bool, config: &crate::config::Config) {
     let mut source = String::new();
-    io::stdin()
-        .read_to_string(&mut source)
-        .unwrap_or_else(|e| {
-            eprintln!("ffmt: cannot read stdin: {e}");
-            process::exit(2);
-        });
+    io::stdin().read_to_string(&mut source).unwrap_or_else(|e| {
+        eprintln!("ffmt: cannot read stdin: {e}");
+        process::exit(2);
+    });
 
     let range = parse_range(&args.range);
     let formatted = crate::formatter::format_with_config(&source, config, range);
@@ -331,12 +320,10 @@ fn discover_files_with_config(
         if !excludes.is_empty() {
             let mut overrides = ignore::overrides::OverrideBuilder::new(path);
             for pattern in excludes {
-                overrides
-                    .add(&format!("!{pattern}"))
-                    .unwrap_or_else(|e| {
-                        eprintln!("ffmt: invalid exclude pattern '{pattern}': {e}");
-                        process::exit(2);
-                    });
+                overrides.add(&format!("!{pattern}")).unwrap_or_else(|e| {
+                    eprintln!("ffmt: invalid exclude pattern '{pattern}': {e}");
+                    process::exit(2);
+                });
             }
             if let Ok(ov) = overrides.build() {
                 builder.overrides(ov);
@@ -375,11 +362,7 @@ struct ProcessOptions {
     verbose: bool,
 }
 
-fn process_file(
-    path: &Path,
-    opts: &ProcessOptions,
-    config: &crate::config::Config,
-) -> bool {
+fn process_file(path: &Path, opts: &ProcessOptions, config: &crate::config::Config) -> bool {
     let source = match fs::read_to_string(path) {
         Ok(s) => s,
         Err(e) if e.kind() == io::ErrorKind::InvalidData => {
@@ -511,7 +494,8 @@ impl FileCache {
 
     fn update(&mut self, path: &Path) {
         if let Ok(content) = fs::read(path) {
-            self.entries.insert(path.to_path_buf(), hash_bytes(&content));
+            self.entries
+                .insert(path.to_path_buf(), hash_bytes(&content));
         }
     }
 

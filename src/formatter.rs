@@ -1,11 +1,12 @@
 use crate::case_norm::normalize_case;
-use crate::classifier::{classify, end_block_keyword, end_statement_has_name, extract_scope_name, LineKind};
+use crate::classifier::{
+    classify, end_block_keyword, end_statement_has_name, extract_scope_name, LineKind,
+};
 use crate::config::{Config, EndOfLine, KeywordCase};
 use crate::keyword_norm::normalize_keywords;
 use crate::reader::read_logical_lines;
 use crate::scope::ScopeTracker;
 use crate::whitespace::normalize_whitespace;
-
 
 /// Ensure a space after `!` in regular comments (not directives, Doxygen, Fypp).
 fn normalize_comment_space(comment: &str) -> String {
@@ -71,11 +72,7 @@ pub fn format_with_range(source: &str, range: Option<(usize, usize)>) -> String 
 }
 
 /// Format with full config and optional range.
-pub fn format_with_config(
-    source: &str,
-    config: &Config,
-    range: Option<(usize, usize)>,
-) -> String {
+pub fn format_with_config(source: &str, config: &Config, range: Option<(usize, usize)>) -> String {
     let logical_lines = read_logical_lines(source);
     let mut tracker = ScopeTracker::new();
     let mut output_lines: Vec<String> = Vec::new();
@@ -162,7 +159,8 @@ pub fn format_with_config(
         // If we just ended a procedure and this non-blank line is not another end/contains,
         // we may need to ensure exactly one blank line before it.
         if just_ended_procedure && in_range && tracker.in_contains() {
-            let is_end_or_contains = kind == LineKind::FortranBlockClose || kind == LineKind::FortranContains;
+            let is_end_or_contains =
+                kind == LineKind::FortranBlockClose || kind == LineKind::FortranContains;
             if !is_end_or_contains {
                 // This should be the start of a new procedure. Ensure exactly one blank line.
                 // Remove excess blank lines (already handled by collapse above).
@@ -178,7 +176,10 @@ pub fn format_with_config(
         just_ended_procedure = false;
 
         // --- Track procedure entry/exit ---
-        if kind == LineKind::FortranBlockOpen && tracker.in_contains() && is_procedure_start(&ll.joined) {
+        if kind == LineKind::FortranBlockOpen
+            && tracker.in_contains()
+            && is_procedure_start(&ll.joined)
+        {
             procedure_depth.push(tracker.current_depth());
         }
 
@@ -217,8 +218,7 @@ pub fn format_with_config(
         // Check for acc loop directive
         if kind == LineKind::Directive {
             let content_lower = ll.joined.trim().to_ascii_lowercase();
-            if content_lower.contains("!$acc loop")
-                || content_lower.contains("!$acc parallel loop")
+            if content_lower.contains("!$acc loop") || content_lower.contains("!$acc parallel loop")
             {
                 skip_next_blank = true;
             }
@@ -236,7 +236,6 @@ pub fn format_with_config(
         // --- Emit each raw line with formatting ---
         // Track the indent delta from the first line so continuation lines
         // can be shifted proportionally.
-        
 
         for (raw_idx, raw_line) in ll.raw_lines.iter().enumerate() {
             let trimmed = raw_line.trim_end();
@@ -244,8 +243,16 @@ pub fn format_with_config(
             match kind {
                 LineKind::Comment => {
                     let content = trimmed.trim_start();
-                    let content = if config.unicode_to_ascii { crate::unicode::replace_unicode(content) } else { content.to_string() };
-                    let content = if config.space_after_comment.is_enabled() { normalize_comment_space(&content) } else { content };
+                    let content = if config.unicode_to_ascii {
+                        crate::unicode::replace_unicode(content)
+                    } else {
+                        content.to_string()
+                    };
+                    let content = if config.space_after_comment.is_enabled() {
+                        normalize_comment_space(&content)
+                    } else {
+                        content
+                    };
                     if content.starts_with("!!") {
                         // Doxygen continuation: apply proper indentation
                         let indented = apply_indent(&content, depth, config.indent_width);
@@ -273,7 +280,11 @@ pub fn format_with_config(
                             if cont_text.starts_with('@') || cont_text.trim().is_empty() {
                                 break;
                             }
-                            let cont_text = if config.unicode_to_ascii { crate::unicode::replace_unicode(cont_text) } else { cont_text.to_string() };
+                            let cont_text = if config.unicode_to_ascii {
+                                crate::unicode::replace_unicode(cont_text)
+                            } else {
+                                cont_text.to_string()
+                            };
                             full_text.push(' ');
                             full_text.push_str(&cont_text);
                             idx += 1;
@@ -283,17 +294,33 @@ pub fn format_with_config(
 
                         let indent_str = " ".repeat(depth * config.indent_width);
                         // Normalize internal whitespace (collapse multiple spaces)
-                        let full_trimmed: String = full_text.split_whitespace().collect::<Vec<&str>>().join(" ");
+                        let full_trimmed: String = full_text
+                            .split_whitespace()
+                            .collect::<Vec<&str>>()
+                            .join(" ");
                         let reconstructed = if full_trimmed.is_empty() {
                             format!("{}!>", indent_str)
                         } else {
                             format!("{}!> {}", indent_str, full_trimmed)
                         };
-                        let wrapped = if config.rewrap_comments.is_enabled() { wrap_comment(&reconstructed, config.line_length, depth, config.indent_width) } else { vec![reconstructed.clone()] };
+                        let wrapped = if config.rewrap_comments.is_enabled() {
+                            wrap_comment(
+                                &reconstructed,
+                                config.line_length,
+                                depth,
+                                config.indent_width,
+                            )
+                        } else {
+                            vec![reconstructed.clone()]
+                        };
                         output_lines.extend(wrapped);
                     } else {
                         let indented = apply_indent(&content, depth, config.indent_width);
-                        let wrapped = if config.rewrap_comments.is_enabled() { wrap_comment(&indented, config.line_length, depth, config.indent_width) } else { vec![indented.clone()] };
+                        let wrapped = if config.rewrap_comments.is_enabled() {
+                            wrap_comment(&indented, config.line_length, depth, config.indent_width)
+                        } else {
+                            vec![indented.clone()]
+                        };
                         output_lines.extend(wrapped);
                     }
                 }
@@ -325,7 +352,11 @@ pub fn format_with_config(
                         // Python code and Fypp quoting ({' ... '}) that the Fortran
                         // normalizer can't parse correctly.
                         // For multi-line, use the joined line (reader normalizes spacing).
-                        let source = if ll.raw_lines.len() > 1 { &ll.joined } else { trimmed };
+                        let source = if ll.raw_lines.len() > 1 {
+                            &ll.joined
+                        } else {
+                            trimmed
+                        };
                         let mut processed = source.to_string();
                         if config.normalize_keywords.is_enabled() {
                             processed = normalize_keywords(&processed);
@@ -335,7 +366,9 @@ pub fn format_with_config(
                             KeywordCase::Upper => processed = normalize_case_upper(&processed),
                             KeywordCase::Preserve => {}
                         }
-                        if config.fypp_list_commas.is_enabled() { processed = normalize_fypp_lists(&processed); }
+                        if config.fypp_list_commas.is_enabled() {
+                            processed = normalize_fypp_lists(&processed);
+                        }
                         processed = remove_fypp_macro_paren_space(&processed);
                         let formatted = apply_indent(processed.trim(), depth, config.indent_width);
                         // Rewrap long Fypp lines at top-level argument commas
@@ -358,7 +391,11 @@ pub fn format_with_config(
                             formatted = maybe_add_end_name(&formatted, &tracker, config);
                         }
 
-                        let wrapped = if config.rewrap_code.is_enabled() { rewrap_line(&formatted, config.line_length, config.indent_width) } else { vec![formatted.clone()] };
+                        let wrapped = if config.rewrap_code.is_enabled() {
+                            rewrap_line(&formatted, config.line_length, config.indent_width)
+                        } else {
+                            vec![formatted.clone()]
+                        };
                         output_lines.extend(wrapped);
                     } else if raw_idx == 0 {
                         // Check if the continuation was interrupted by a preprocessor
@@ -367,9 +404,15 @@ pub fn format_with_config(
                         // Fortran statement that spans the preprocessor block.
                         let next_is_cpp = idx + 1 < ll_count && {
                             let next_kind = classify(&logical_lines[idx + 1].joined);
-                            matches!(next_kind,
-                                LineKind::PreprocessorDirective | LineKind::PreprocessorContinuation | LineKind::PreprocessorClose |
-                                LineKind::FyppBlockOpen | LineKind::FyppBlockClose | LineKind::FyppContinuation | LineKind::FyppStatement
+                            matches!(
+                                next_kind,
+                                LineKind::PreprocessorDirective
+                                    | LineKind::PreprocessorContinuation
+                                    | LineKind::PreprocessorClose
+                                    | LineKind::FyppBlockOpen
+                                    | LineKind::FyppBlockClose
+                                    | LineKind::FyppContinuation
+                                    | LineKind::FyppStatement
                             )
                         };
 
@@ -389,11 +432,17 @@ pub fn format_with_config(
                                 }
                                 match config.keyword_case {
                                     KeywordCase::Lower => processed = normalize_case(&processed),
-                                    KeywordCase::Upper => processed = normalize_case_upper(&processed),
+                                    KeywordCase::Upper => {
+                                        processed = normalize_case_upper(&processed)
+                                    }
                                     KeywordCase::Preserve => {}
                                 }
                                 if ri == 0 {
-                                    output_lines.push(apply_indent(processed.trim(), depth, config.indent_width));
+                                    output_lines.push(apply_indent(
+                                        processed.trim(),
+                                        depth,
+                                        config.indent_width,
+                                    ));
                                 } else {
                                     output_lines.push(processed);
                                 }
@@ -403,16 +452,21 @@ pub fn format_with_config(
 
                         // Normal multi-line: unravel joined line, normalize, rewrap
                         let processed = process_line(&ll.joined, config);
-                        let formatted =
-                            apply_indent(processed.trim(), depth, config.indent_width);
+                        let formatted = apply_indent(processed.trim(), depth, config.indent_width);
 
-                        let formatted = if kind == LineKind::FortranBlockClose && config.named_ends.is_enabled() {
+                        let formatted = if kind == LineKind::FortranBlockClose
+                            && config.named_ends.is_enabled()
+                        {
                             maybe_add_end_name(&formatted, &tracker, config)
                         } else {
                             formatted
                         };
 
-                        let wrapped = if config.rewrap_code.is_enabled() { rewrap_line(&formatted, config.line_length, config.indent_width) } else { vec![formatted.clone()] };
+                        let wrapped = if config.rewrap_code.is_enabled() {
+                            rewrap_line(&formatted, config.line_length, config.indent_width)
+                        } else {
+                            vec![formatted.clone()]
+                        };
                         output_lines.extend(wrapped);
                         break; // Skip remaining raw lines
                     } else {
@@ -487,8 +541,10 @@ pub fn format_with_config(
         output_lines = apply(output_lines, &|lines: &[String]| {
             let mut final_lines: Vec<String> = Vec::new();
             for line in lines {
-                if line.len() > ll && find_inline_doxygen_in_line(line).is_none()
-                    && !line.trim_end().ends_with('&') {
+                if line.len() > ll
+                    && find_inline_doxygen_in_line(line).is_none()
+                    && !line.trim_end().ends_with('&')
+                {
                     final_lines.extend(rewrap_line(line, ll, iw));
                 } else {
                     final_lines.push(line.clone());
@@ -508,7 +564,9 @@ pub fn format_with_config(
         let cd = config.compact_declarations.is_enabled();
         let ac = config.align_comments;
         let ll = config.line_length;
-        output_lines = apply(output_lines, &|lines| crate::align::align_declarations(lines, cd, ac, ll));
+        output_lines = apply(output_lines, &|lines| {
+            crate::align::align_declarations(lines, cd, ac, ll)
+        });
     }
 
     // Ensure at least 2 spaces before inline comments (Fortitude S102)
@@ -680,8 +738,6 @@ fn process_line(line: &str, config: &Config) -> String {
     result
 }
 
-
-
 /// Count leading spaces in a string.
 fn leading_spaces(s: &str) -> usize {
     s.len() - s.trim_start().len()
@@ -703,7 +759,11 @@ fn split_doxygen_commands(line: &str) -> Vec<String> {
 
     let indent = leading_spaces(line);
     let prefix = " ".repeat(indent);
-    let marker = if trimmed.starts_with("!>") { "!>" } else { "!!" };
+    let marker = if trimmed.starts_with("!>") {
+        "!>"
+    } else {
+        "!!"
+    };
     let text = extract_comment_text(trimmed, marker);
 
     // Find @ commands in the text (@ followed by a letter)
@@ -738,7 +798,11 @@ fn split_doxygen_commands(line: &str) -> Vec<String> {
     // Last chunk
     let chunk = text[prev..].trim();
     if !chunk.is_empty() {
-        let m = if result.is_empty() { marker } else { cont_marker };
+        let m = if result.is_empty() {
+            marker
+        } else {
+            cont_marker
+        };
         result.push(format!("{}{} {}", prefix, m, chunk));
     }
 
@@ -825,14 +889,22 @@ fn wrap_comment(line: &str, max_length: usize, _depth: usize, _indent_width: usi
             current_line.push(' ');
             current_line.push_str(word);
         } else {
-            let pfx = if is_first { &first_prefix } else { &cont_prefix };
+            let pfx = if is_first {
+                &first_prefix
+            } else {
+                &cont_prefix
+            };
             result.push(format!("{}{}", pfx, current_line));
             current_line = word.to_string();
             is_first = false;
         }
     }
     if !current_line.is_empty() {
-        let pfx = if is_first { &first_prefix } else { &cont_prefix };
+        let pfx = if is_first {
+            &first_prefix
+        } else {
+            &cont_prefix
+        };
         result.push(format!("{}{}", pfx, current_line));
     }
 
@@ -944,7 +1016,10 @@ fn rewrap_inline_doxygen(lines: &[String], max_length: usize) -> Vec<String> {
         while peek < lines.len() && lines[peek].trim().is_empty() {
             peek += 1;
         }
-        if peek < lines.len() && lines[peek].trim_start().starts_with("!!") && !lines[peek].trim_start().starts_with("!!>") {
+        if peek < lines.len()
+            && lines[peek].trim_start().starts_with("!!")
+            && !lines[peek].trim_start().starts_with("!!>")
+        {
             j = peek; // skip blanks, there are !! continuations
         }
 
@@ -973,7 +1048,10 @@ fn rewrap_inline_doxygen(lines: &[String], max_length: usize) -> Vec<String> {
                 while peek2 < lines.len() && lines[peek2].trim().is_empty() {
                     peek2 += 1;
                 }
-                if peek2 < lines.len() && lines[peek2].trim_start().starts_with("!!") && !lines[peek2].trim_start().starts_with("!!>") {
+                if peek2 < lines.len()
+                    && lines[peek2].trim_start().starts_with("!!")
+                    && !lines[peek2].trim_start().starts_with("!!>")
+                {
                     j += 1;
                 } else {
                     break;
@@ -984,7 +1062,10 @@ fn rewrap_inline_doxygen(lines: &[String], max_length: usize) -> Vec<String> {
         }
 
         // Normalize internal whitespace (collapse multiple spaces)
-        let full_text: String = full_text.split_whitespace().collect::<Vec<&str>>().join(" ");
+        let full_text: String = full_text
+            .split_whitespace()
+            .collect::<Vec<&str>>()
+            .join(" ");
 
         // Try to fit the full comment on the declaration line
         if full_text.is_empty() {
@@ -998,8 +1079,16 @@ fn rewrap_inline_doxygen(lines: &[String], max_length: usize) -> Vec<String> {
                 // Won't fit on one line: emit as !> block comment above the declaration
                 let prefix_first = format!("{}!> ", " ".repeat(indent));
                 let prefix_cont = format!("{}!! ", " ".repeat(indent));
-                let avail_first = if max_length > prefix_first.len() { max_length - prefix_first.len() } else { 40 };
-                let avail_cont = if max_length > prefix_cont.len() { max_length - prefix_cont.len() } else { 40 };
+                let avail_first = if max_length > prefix_first.len() {
+                    max_length - prefix_first.len()
+                } else {
+                    40
+                };
+                let avail_cont = if max_length > prefix_cont.len() {
+                    max_length - prefix_cont.len()
+                } else {
+                    40
+                };
                 let words: Vec<&str> = full_text.split_whitespace().collect();
                 let mut current = String::new();
                 let mut is_first = true;
@@ -1011,14 +1100,22 @@ fn rewrap_inline_doxygen(lines: &[String], max_length: usize) -> Vec<String> {
                         current.push(' ');
                         current.push_str(word);
                     } else {
-                        let pfx = if is_first { &prefix_first } else { &prefix_cont };
+                        let pfx = if is_first {
+                            &prefix_first
+                        } else {
+                            &prefix_cont
+                        };
                         result.push(format!("{}{}", pfx, current));
                         current = word.to_string();
                         is_first = false;
                     }
                 }
                 if !current.is_empty() {
-                    let pfx = if is_first { &prefix_first } else { &prefix_cont };
+                    let pfx = if is_first {
+                        &prefix_first
+                    } else {
+                        &prefix_cont
+                    };
                     result.push(format!("{}{}", pfx, current));
                 }
                 result.push(code_part.to_string());
@@ -1103,7 +1200,8 @@ fn remove_blanks_before_closers(lines: &[String]) -> Vec<String> {
 
         // Remove blank lines before closers (but not before end subroutine/function
         // or contains — those get a blank line for visual separation)
-        let is_proc_end = trimmed.starts_with("end subroutine") || trimmed.starts_with("end function");
+        let is_proc_end =
+            trimmed.starts_with("end subroutine") || trimmed.starts_with("end function");
         let is_contains = trimmed == "contains";
         if is_closer && !is_proc_end && !is_contains {
             while result.last().is_some_and(|l| l.trim().is_empty()) {
@@ -1163,8 +1261,9 @@ fn remove_blanks_before_closers(lines: &[String]) -> Vec<String> {
 fn is_major_end_block(line: &str) -> bool {
     let trimmed = line.trim().to_ascii_lowercase();
     let re = regex::Regex::new(
-        r"(?i)^end\s+(subroutine|function|module|submodule|program|type|interface)\b"
-    ).unwrap();
+        r"(?i)^end\s+(subroutine|function|module|submodule|program|type|interface)\b",
+    )
+    .unwrap();
     re.is_match(&trimmed)
 }
 
@@ -1177,7 +1276,9 @@ fn is_end_procedure_line(line: &str) -> bool {
 /// Check if a line is `end module`, `end submodule`, or `end program`.
 fn is_end_enclosing_block(line: &str) -> bool {
     let lower = line.trim().to_ascii_lowercase();
-    lower.starts_with("end module") || lower.starts_with("end submodule") || lower.starts_with("end program")
+    lower.starts_with("end module")
+        || lower.starts_with("end submodule")
+        || lower.starts_with("end program")
 }
 
 /// Check if a line is a `module` or `program` opener (not `module procedure`).
@@ -1247,10 +1348,17 @@ fn join_short_comments(lines: &[String], max_length: usize) -> Vec<String> {
         // Detect which comment marker this line uses
         let marker = if trimmed.starts_with("!! ") && !trimmed.starts_with("!!>") {
             let text_after = &trimmed[3..];
-            if text_after.starts_with('@') { None } else { Some("!!") }
-        } else if trimmed.starts_with("! ") && !trimmed.starts_with("!> ")
-            && !trimmed.starts_with("!< ") && !trimmed.starts_with("!$ ")
-            && !trimmed.starts_with("!* ") && !trimmed.starts_with("!@ ")
+            if text_after.starts_with('@') {
+                None
+            } else {
+                Some("!!")
+            }
+        } else if trimmed.starts_with("! ")
+            && !trimmed.starts_with("!> ")
+            && !trimmed.starts_with("!< ")
+            && !trimmed.starts_with("!$ ")
+            && !trimmed.starts_with("!* ")
+            && !trimmed.starts_with("!@ ")
         {
             Some("!")
         } else {
@@ -1261,7 +1369,11 @@ fn join_short_comments(lines: &[String], max_length: usize) -> Vec<String> {
             let mk_len = mk.len();
             let indent = leading_spaces(line);
             let prefix = format!("{}{} ", " ".repeat(indent), mk);
-            let avail = if max_length > prefix.len() { max_length - prefix.len() } else { 40 };
+            let avail = if max_length > prefix.len() {
+                max_length - prefix.len()
+            } else {
+                40
+            };
 
             // Collect ALL consecutive comment lines with the same marker and indent
             let mut full_text = trimmed[mk_len + 1..].to_string();
@@ -1271,9 +1383,12 @@ fn join_short_comments(lines: &[String], max_length: usize) -> Vec<String> {
                 let next = &lines[j];
                 let next_trimmed = next.trim_start();
                 let next_indent = leading_spaces(next);
-                let next_matches = next_indent == indent && next_trimmed.starts_with(mk)
-                    && next_trimmed.len() > mk_len && next_trimmed.as_bytes()[mk_len] == b' ';
-                let next_matches = next_matches && !(mk == "!!" && next_trimmed[mk_len + 1..].starts_with('@'));
+                let next_matches = next_indent == indent
+                    && next_trimmed.starts_with(mk)
+                    && next_trimmed.len() > mk_len
+                    && next_trimmed.as_bytes()[mk_len] == b' ';
+                let next_matches =
+                    next_matches && !(mk == "!!" && next_trimmed[mk_len + 1..].starts_with('@'));
 
                 if next_matches {
                     full_text.push(' ');
@@ -1367,101 +1482,125 @@ fn is_declaration_line(line: &str) -> bool {
 /// code and a trailing comment (not standalone comment lines, not `!$` directives,
 /// not `!>` or `!<` Doxygen, not Fypp lines).
 fn ensure_two_spaces_before_inline_comment(lines: &[String]) -> Vec<String> {
-    lines.iter().map(|line| {
-        let trimmed = line.trim_start();
-        // Skip blank lines, standalone comments, preprocessor, Fypp
-        if trimmed.is_empty() || trimmed.starts_with('!') || trimmed.starts_with('#')
-            || trimmed.starts_with("$:") || trimmed.starts_with("@:") {
-            return line.clone();
-        }
-        // Find the inline comment position (! outside strings)
-        let bytes = line.as_bytes();
-        let mut in_string = false;
-        let mut delim = b' ';
-        for i in 0..bytes.len() {
-            if in_string {
-                if bytes[i] == delim {
-                    // Check for doubled quote escape
-                    if i + 1 < bytes.len() && bytes[i + 1] == delim {
-                        continue; // skip
-                    }
-                    in_string = false;
-                }
-            } else if bytes[i] == b'\'' || bytes[i] == b'"' {
-                in_string = true;
-                delim = bytes[i];
-            } else if bytes[i] == b'!' {
-                // Found inline comment. Check spacing before it.
-                if i == 0 { return line.clone(); } // standalone comment
-                // Skip directives (!$acc, !$omp), standalone Doxygen (!>), and !! continuations
-                let rest = &line[i..];
-                if rest.starts_with("!$") || rest.starts_with("!>") || rest.starts_with("!!") {
-                    return line.clone();
-                }
-                // Count spaces before the `!`
-                let mut spaces = 0;
-                let mut j = i;
-                while j > 0 && bytes[j - 1] == b' ' {
-                    spaces += 1;
-                    j -= 1;
-                }
-                if j == 0 { return line.clone(); } // all spaces before ! = standalone
-                if spaces >= 2 { return line.clone(); } // already ok
-                // Add spaces to reach 2, but only if it won't exceed line_length
-                let code_part = &line[..i].trim_end();
-                let comment_part = &line[i..];
-                return format!("{}  {}", code_part, comment_part);
+    lines
+        .iter()
+        .map(|line| {
+            let trimmed = line.trim_start();
+            // Skip blank lines, standalone comments, preprocessor, Fypp
+            if trimmed.is_empty()
+                || trimmed.starts_with('!')
+                || trimmed.starts_with('#')
+                || trimmed.starts_with("$:")
+                || trimmed.starts_with("@:")
+            {
+                return line.clone();
             }
-        }
-        line.clone()
-    }).collect()
+            // Find the inline comment position (! outside strings)
+            let bytes = line.as_bytes();
+            let mut in_string = false;
+            let mut delim = b' ';
+            for i in 0..bytes.len() {
+                if in_string {
+                    if bytes[i] == delim {
+                        // Check for doubled quote escape
+                        if i + 1 < bytes.len() && bytes[i + 1] == delim {
+                            continue; // skip
+                        }
+                        in_string = false;
+                    }
+                } else if bytes[i] == b'\'' || bytes[i] == b'"' {
+                    in_string = true;
+                    delim = bytes[i];
+                } else if bytes[i] == b'!' {
+                    // Found inline comment. Check spacing before it.
+                    if i == 0 {
+                        return line.clone();
+                    } // standalone comment
+                      // Skip directives (!$acc, !$omp), standalone Doxygen (!>), and !! continuations
+                    let rest = &line[i..];
+                    if rest.starts_with("!$") || rest.starts_with("!>") || rest.starts_with("!!") {
+                        return line.clone();
+                    }
+                    // Count spaces before the `!`
+                    let mut spaces = 0;
+                    let mut j = i;
+                    while j > 0 && bytes[j - 1] == b' ' {
+                        spaces += 1;
+                        j -= 1;
+                    }
+                    if j == 0 {
+                        return line.clone();
+                    } // all spaces before ! = standalone
+                    if spaces >= 2 {
+                        return line.clone();
+                    } // already ok
+                      // Add spaces to reach 2, but only if it won't exceed line_length
+                    let code_part = &line[..i].trim_end();
+                    let comment_part = &line[i..];
+                    return format!("{}  {}", code_part, comment_part);
+                }
+            }
+            line.clone()
+        })
+        .collect()
 }
 
 /// Strip trailing semicolons from lines (Fortitude S081).
 /// Removes `;` at the end of a line (before any trailing comment), but only if
 /// it's truly trailing — not between statements on the same line.
 fn strip_trailing_semicolons(lines: &[String]) -> Vec<String> {
-    lines.iter().map(|line| {
-        let trimmed = line.trim_start();
-        // Skip blank, comment-only, preprocessor, Fypp lines
-        if trimmed.is_empty() || trimmed.starts_with('!') || trimmed.starts_with('#')
-            || trimmed.starts_with("$:") || trimmed.starts_with("@:") {
-            return line.clone();
-        }
-        // Find the code portion (before any inline comment)
-        let bytes = line.as_bytes();
-        let mut in_string = false;
-        let mut delim = b' ';
-        let mut comment_start = bytes.len();
-        for i in 0..bytes.len() {
-            if in_string {
-                if bytes[i] == delim {
-                    if i + 1 < bytes.len() && bytes[i + 1] == delim {
-                        continue;
+    lines
+        .iter()
+        .map(|line| {
+            let trimmed = line.trim_start();
+            // Skip blank, comment-only, preprocessor, Fypp lines
+            if trimmed.is_empty()
+                || trimmed.starts_with('!')
+                || trimmed.starts_with('#')
+                || trimmed.starts_with("$:")
+                || trimmed.starts_with("@:")
+            {
+                return line.clone();
+            }
+            // Find the code portion (before any inline comment)
+            let bytes = line.as_bytes();
+            let mut in_string = false;
+            let mut delim = b' ';
+            let mut comment_start = bytes.len();
+            for i in 0..bytes.len() {
+                if in_string {
+                    if bytes[i] == delim {
+                        if i + 1 < bytes.len() && bytes[i + 1] == delim {
+                            continue;
+                        }
+                        in_string = false;
                     }
-                    in_string = false;
+                } else if bytes[i] == b'\'' || bytes[i] == b'"' {
+                    in_string = true;
+                    delim = bytes[i];
+                } else if bytes[i] == b'!' {
+                    comment_start = i;
+                    break;
                 }
-            } else if bytes[i] == b'\'' || bytes[i] == b'"' {
-                in_string = true;
-                delim = bytes[i];
-            } else if bytes[i] == b'!' {
-                comment_start = i;
-                break;
             }
-        }
-        let code = &line[..comment_start];
-        let comment = &line[comment_start..];
-        let code_trimmed = code.trim_end();
-        if code_trimmed.ends_with(';') {
-            let stripped = code_trimmed.strip_suffix(';').unwrap().trim_end();
-            if comment.is_empty() {
-                return format!("{}{}", &line[..line.len() - line.trim_start().len()], stripped.trim_start());
-            } else {
-                return format!("{}  {}", stripped, comment.trim_start());
+            let code = &line[..comment_start];
+            let comment = &line[comment_start..];
+            let code_trimmed = code.trim_end();
+            if code_trimmed.ends_with(';') {
+                let stripped = code_trimmed.strip_suffix(';').unwrap().trim_end();
+                if comment.is_empty() {
+                    return format!(
+                        "{}{}",
+                        &line[..line.len() - line.trim_start().len()],
+                        stripped.trim_start()
+                    );
+                } else {
+                    return format!("{}  {}", stripped, comment.trim_start());
+                }
             }
-        }
-        line.clone()
-    }).collect()
+            line.clone()
+        })
+        .collect()
 }
 
 /// Ensure a blank line between the last declaration and the first executable statement
@@ -1493,24 +1632,31 @@ fn separate_declarations_from_code(lines: &[String]) -> Vec<String> {
         if in_decl_region {
             // Skip blank lines, comments, and continuation lines
             // (preprocessor #ifdef/#ifndef/#if end the declaration region below)
-            if trimmed.is_empty() || trimmed.starts_with('!')
-                || trimmed.starts_with('&') {
+            if trimmed.is_empty() || trimmed.starts_with('!') || trimmed.starts_with('&') {
                 result.push(line.clone());
                 continue;
             }
 
             // Preprocessor #endif/#else/#include/#define — skip without ending region
-            if trimmed.starts_with("#endif") || trimmed.starts_with("#else")
-                || trimmed.starts_with("#elif") || trimmed.starts_with("#include")
-                || trimmed.starts_with("#define") || trimmed.starts_with("#undef") {
+            if trimmed.starts_with("#endif")
+                || trimmed.starts_with("#else")
+                || trimmed.starts_with("#elif")
+                || trimmed.starts_with("#include")
+                || trimmed.starts_with("#define")
+                || trimmed.starts_with("#undef")
+            {
                 result.push(line.clone());
                 continue;
             }
 
             // Fypp lines ($:, @:, #:) and #ifdef/#ifndef/#if — end the declaration region
-            if trimmed.starts_with("@:") || trimmed.starts_with("$:") || trimmed.starts_with("#:")
-                || trimmed.starts_with("#ifdef") || trimmed.starts_with("#ifndef")
-                || trimmed.starts_with("#if ") {
+            if trimmed.starts_with("@:")
+                || trimmed.starts_with("$:")
+                || trimmed.starts_with("#:")
+                || trimmed.starts_with("#ifdef")
+                || trimmed.starts_with("#ifndef")
+                || trimmed.starts_with("#if ")
+            {
                 in_decl_region = false;
                 if saw_declaration {
                     let has_blank = result.last().is_some_and(|l| l.trim().is_empty());
@@ -1626,7 +1772,6 @@ fn rewrap_fypp_line(line: &str, max_length: usize) -> Vec<String> {
     let mut chunk_start = 0usize;
 
     for &comma_end in &comma_positions {
-        
         // +2 accounts for trailing " &" on non-last lines
         let current_len = if result.is_empty() {
             indent + comma_end + 2
@@ -1715,11 +1860,23 @@ fn rewrap_line(line: &str, max_length: usize, indent_width: usize) -> Vec<String
         let cb = content.as_bytes();
         for i in 0..cb.len() {
             if in_str {
-                if cb[i] == qch { if i + 1 < cb.len() && cb[i + 1] == qch { continue; } in_str = false; }
+                if cb[i] == qch {
+                    if i + 1 < cb.len() && cb[i + 1] == qch {
+                        continue;
+                    }
+                    in_str = false;
+                }
                 continue;
             }
-            if cb[i] == b'\'' || cb[i] == b'"' { in_str = true; qch = cb[i]; continue; }
-            if cb[i] == b'(' { found = Some(indent + i + 1); break; }
+            if cb[i] == b'\'' || cb[i] == b'"' {
+                in_str = true;
+                qch = cb[i];
+                continue;
+            }
+            if cb[i] == b'(' {
+                found = Some(indent + i + 1);
+                break;
+            }
         }
         found
     };
@@ -1753,7 +1910,6 @@ fn rewrap_line(line: &str, max_length: usize, indent_width: usize) -> Vec<String
 
         // Find best break point within avail characters
         let abs_limit = pos + avail;
-        
 
         // Walk through token breaks, find the last one before the limit
         // Prefer commas (BreakKind::Comma) over operators
@@ -1782,7 +1938,9 @@ fn rewrap_line(line: &str, max_length: usize, indent_width: usize) -> Vec<String
             // No break within limit — find first comma AFTER limit (long string literal)
             let mut first_comma_after = 0usize;
             for &(bp, kind) in &breaks {
-                if bp <= pos { continue; }
+                if bp <= pos {
+                    continue;
+                }
                 if matches!(kind, BreakKind::Comma) {
                     first_comma_after = bp - pos;
                     break;
@@ -1903,8 +2061,11 @@ fn find_token_breaks(content: &str) -> Vec<(usize, BreakKind)> {
             if (b == b'+' || b == b'-') && i > 0 {
                 let prev = bytes[i - 1];
                 // Binary if preceded by space, close paren, alphanumeric, or _
-                if prev == b' ' || prev == b')' || prev == b']'
-                    || prev.is_ascii_alphanumeric() || prev == b'_'
+                if prev == b' '
+                    || prev == b')'
+                    || prev == b']'
+                    || prev.is_ascii_alphanumeric()
+                    || prev == b'_'
                 {
                     // But not if it's part of exponent notation (e+3, d-5)
                     if !(i >= 2
@@ -1940,9 +2101,7 @@ fn remove_fypp_macro_paren_space(line: &str) -> String {
     use regex::Regex;
     use std::sync::OnceLock;
     static RE: OnceLock<Regex> = OnceLock::new();
-    let re = RE.get_or_init(|| {
-        Regex::new(r"(?m)^(\s*[@$]:[\w]+)\s+\(").unwrap()
-    });
+    let re = RE.get_or_init(|| Regex::new(r"(?m)^(\s*[@$]:[\w]+)\s+\(").unwrap());
     re.replace(line, r"${1}(").to_string()
 }
 
@@ -2172,9 +2331,7 @@ fn enforce_double_colon(lines: &[String]) -> Vec<String> {
                 let var_part = caps.get(2).unwrap().as_str();
 
                 let var_lower = var_part.trim().to_ascii_lowercase();
-                if var_lower.starts_with("function ")
-                    || var_lower.starts_with("subroutine ")
-                {
+                if var_lower.starts_with("function ") || var_lower.starts_with("subroutine ") {
                     return line.clone();
                 }
 
@@ -2357,7 +2514,12 @@ fn align_assignments(lines: &[String], max_length: usize) -> Vec<String> {
                 // Insert padding before the `=`
                 let before_eq = &line[..eq_col];
                 let from_eq = &line[eq_col..];
-                let new_line = format!("{}{}{}", before_eq.trim_end(), " ".repeat(padding + 1), from_eq.trim_start());
+                let new_line = format!(
+                    "{}{}{}",
+                    before_eq.trim_end(),
+                    " ".repeat(padding + 1),
+                    from_eq.trim_start()
+                );
                 // Check if alignment would exceed max_length
                 if new_line.len() <= max_length {
                     result.push(new_line);
@@ -2451,7 +2613,11 @@ fn reformat_use_statements(lines: &[String], indent_width: usize) -> Vec<String>
         let lower = trimmed.to_ascii_lowercase();
 
         // Skip non-use lines, Fypp-conditional use statements
-        if !lower.starts_with("use ") || trimmed.starts_with("#") || trimmed.starts_with("$:") || trimmed.starts_with("@:") {
+        if !lower.starts_with("use ")
+            || trimmed.starts_with("#")
+            || trimmed.starts_with("$:")
+            || trimmed.starts_with("@:")
+        {
             result.push(line.clone());
             continue;
         }
@@ -2513,7 +2679,11 @@ fn reformat_use_statements(lines: &[String], indent_width: usize) -> Vec<String>
         }
 
         // Parse comma-separated imports
-        let imports: Vec<&str> = imports_str.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+        let imports: Vec<&str> = imports_str
+            .split(',')
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .collect();
 
         if imports.len() <= 1 {
             result.push(line.clone());

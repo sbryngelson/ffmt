@@ -75,6 +75,10 @@ fn test_continuation_strips_leading_ampersand() {
     assert_eq!(lines.len(), 1);
     // The joined line should have the content without the leading &
     assert!(lines[0].joined.contains("b"));
-    assert!(!lines[0].joined.contains("& b") || lines[0].joined.matches('&').count() <= 0
-            || lines[0].joined.contains("a +  b") || lines[0].joined.contains("a + b"));
+    assert!(
+        !lines[0].joined.contains("& b")
+            || lines[0].joined.matches('&').count() <= 0
+            || lines[0].joined.contains("a +  b")
+            || lines[0].joined.contains("a + b")
+    );
 }

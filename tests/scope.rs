@@ -1,5 +1,5 @@
-use ffmt::scope::ScopeTracker;
 use ffmt::classifier::LineKind;
+use ffmt::scope::ScopeTracker;
 
 #[test]
 fn test_empty() {

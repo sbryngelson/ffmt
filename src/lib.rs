@@ -1,15 +1,15 @@
-pub mod reader;
-pub mod classifier;
-pub mod scope;
-pub mod whitespace;
-pub mod case_norm;
-pub mod keyword_norm;
-pub mod formatter;
-pub mod config;
 pub mod align;
-pub mod unicode;
+pub mod case_norm;
+pub mod classifier;
 pub mod cli;
+pub mod config;
+pub mod formatter;
+pub mod keyword_norm;
 pub mod lsp;
+pub mod reader;
+pub mod scope;
+pub mod unicode;
+pub mod whitespace;
 
 pub use config::Config;
 

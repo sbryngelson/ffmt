@@ -7,7 +7,10 @@ fn test_if_then() {
 }
 #[test]
 fn test_single_line_if() {
-    assert_eq!(classify("if (x > 0) call foo()"), LineKind::FortranStatement);
+    assert_eq!(
+        classify("if (x > 0) call foo()"),
+        LineKind::FortranStatement
+    );
 }
 #[test]
 fn test_do_loop() {
@@ -19,11 +22,17 @@ fn test_do_concurrent() {
 }
 #[test]
 fn test_subroutine() {
-    assert_eq!(classify("subroutine s_foo(x, y)"), LineKind::FortranBlockOpen);
+    assert_eq!(
+        classify("subroutine s_foo(x, y)"),
+        LineKind::FortranBlockOpen
+    );
 }
 #[test]
 fn test_pure_function() {
-    assert_eq!(classify("pure function f_bar(x) result(res)"), LineKind::FortranBlockOpen);
+    assert_eq!(
+        classify("pure function f_bar(x) result(res)"),
+        LineKind::FortranBlockOpen
+    );
 }
 #[test]
 fn test_module() {
@@ -48,7 +57,10 @@ fn test_interface() {
 // --- Fortran block closers ---
 #[test]
 fn test_end_subroutine() {
-    assert_eq!(classify("end subroutine s_foo"), LineKind::FortranBlockClose);
+    assert_eq!(
+        classify("end subroutine s_foo"),
+        LineKind::FortranBlockClose
+    );
 }
 #[test]
 fn test_end_do() {
@@ -65,7 +77,10 @@ fn test_else() {
 }
 #[test]
 fn test_else_if() {
-    assert_eq!(classify("else if (y > 0) then"), LineKind::FortranContinuation);
+    assert_eq!(
+        classify("else if (y > 0) then"),
+        LineKind::FortranContinuation
+    );
 }
 #[test]
 fn test_case() {
@@ -82,7 +97,10 @@ fn test_where_block() {
 }
 #[test]
 fn test_where_statement() {
-    assert_eq!(classify("where (mask > 0) array = 1.0"), LineKind::FortranStatement);
+    assert_eq!(
+        classify("where (mask > 0) array = 1.0"),
+        LineKind::FortranStatement
+    );
 }
 #[test]
 fn test_elsewhere() {
@@ -107,7 +125,10 @@ fn test_type_is() {
 }
 #[test]
 fn test_class_is() {
-    assert_eq!(classify("class is (my_type)"), LineKind::FortranContinuation);
+    assert_eq!(
+        classify("class is (my_type)"),
+        LineKind::FortranContinuation
+    );
 }
 #[test]
 fn test_class_default() {
@@ -120,7 +141,10 @@ fn test_rank_continuation() {
 // --- associate/block/critical/enum ---
 #[test]
 fn test_associate() {
-    assert_eq!(classify("associate (x => obj%field)"), LineKind::FortranBlockOpen);
+    assert_eq!(
+        classify("associate (x => obj%field)"),
+        LineKind::FortranBlockOpen
+    );
 }
 #[test]
 fn test_end_associate() {
@@ -153,7 +177,10 @@ fn test_end_enum() {
 // --- Fypp ---
 #[test]
 fn test_fypp_if() {
-    assert_eq!(classify("#:if defined('MFC_OpenACC')"), LineKind::FyppBlockOpen);
+    assert_eq!(
+        classify("#:if defined('MFC_OpenACC')"),
+        LineKind::FyppBlockOpen
+    );
 }
 #[test]
 fn test_fypp_for() {
@@ -169,7 +196,10 @@ fn test_fypp_else() {
 }
 #[test]
 fn test_fypp_elif() {
-    assert_eq!(classify("#:elif defined('BAR')"), LineKind::FyppContinuation);
+    assert_eq!(
+        classify("#:elif defined('BAR')"),
+        LineKind::FyppContinuation
+    );
 }
 #[test]
 fn test_fypp_include() {
@@ -181,11 +211,17 @@ fn test_fypp_set() {
 }
 #[test]
 fn test_fypp_comment() {
-    assert_eq!(classify("#! This is a Fypp comment"), LineKind::FyppStatement);
+    assert_eq!(
+        classify("#! This is a Fypp comment"),
+        LineKind::FyppStatement
+    );
 }
 #[test]
 fn test_fypp_call() {
-    assert_eq!(classify("#:call GPU_PARALLEL(collapse=3)"), LineKind::FyppBlockOpen);
+    assert_eq!(
+        classify("#:call GPU_PARALLEL(collapse=3)"),
+        LineKind::FyppBlockOpen
+    );
 }
 #[test]
 fn test_fypp_endcall() {
@@ -193,7 +229,10 @@ fn test_fypp_endcall() {
 }
 #[test]
 fn test_fypp_def() {
-    assert_eq!(classify("#:def GPU_PARALLEL(collapse)"), LineKind::FyppBlockOpen);
+    assert_eq!(
+        classify("#:def GPU_PARALLEL(collapse)"),
+        LineKind::FyppBlockOpen
+    );
 }
 #[test]
 fn test_fypp_enddef() {
@@ -218,7 +257,10 @@ fn test_fypp_endmute() {
 // --- Preprocessor ---
 #[test]
 fn test_ifdef() {
-    assert_eq!(classify("#ifdef MFC_OpenACC"), LineKind::PreprocessorDirective);
+    assert_eq!(
+        classify("#ifdef MFC_OpenACC"),
+        LineKind::PreprocessorDirective
+    );
 }
 #[test]
 fn test_ifndef() {
@@ -244,11 +286,17 @@ fn test_omp_directive() {
 // --- Inline Fypp ---
 #[test]
 fn test_inline_fypp_dollar() {
-    assert_eq!(classify("$:GPU_PARALLEL_LOOP(collapse=3)"), LineKind::InlineFypp);
+    assert_eq!(
+        classify("$:GPU_PARALLEL_LOOP(collapse=3)"),
+        LineKind::InlineFypp
+    );
 }
 #[test]
 fn test_inline_fypp_at() {
-    assert_eq!(classify("@:ALLOCATE(q_cons_qp%vf(1:sys_size))"), LineKind::InlineFypp);
+    assert_eq!(
+        classify("@:ALLOCATE(q_cons_qp%vf(1:sys_size))"),
+        LineKind::InlineFypp
+    );
 }
 // --- Other ---
 #[test]
@@ -278,7 +326,10 @@ fn test_labeled_do() {
 }
 #[test]
 fn test_module_procedure_is_statement() {
-    assert_eq!(classify("module procedure my_proc"), LineKind::FortranStatement);
+    assert_eq!(
+        classify("module procedure my_proc"),
+        LineKind::FortranStatement
+    );
 }
 #[test]
 fn test_program() {
@@ -302,7 +353,10 @@ fn test_end_forall() {
 }
 #[test]
 fn test_submodule() {
-    assert_eq!(classify("submodule (parent) child"), LineKind::FortranBlockOpen);
+    assert_eq!(
+        classify("submodule (parent) child"),
+        LineKind::FortranBlockOpen
+    );
 }
 #[test]
 fn test_end_submodule() {
@@ -310,11 +364,17 @@ fn test_end_submodule() {
 }
 #[test]
 fn test_type_extends() {
-    assert_eq!(classify("type, extends(base_type) :: derived_type"), LineKind::FortranBlockOpen);
+    assert_eq!(
+        classify("type, extends(base_type) :: derived_type"),
+        LineKind::FortranBlockOpen
+    );
 }
 #[test]
 fn test_type_abstract() {
-    assert_eq!(classify("type, abstract :: my_abstract"), LineKind::FortranBlockOpen);
+    assert_eq!(
+        classify("type, abstract :: my_abstract"),
+        LineKind::FortranBlockOpen
+    );
 }
 #[test]
 fn test_end_interface() {
@@ -322,5 +382,8 @@ fn test_end_interface() {
 }
 #[test]
 fn test_interface_operator() {
-    assert_eq!(classify("interface operator(+)"), LineKind::FortranBlockOpen);
+    assert_eq!(
+        classify("interface operator(+)"),
+        LineKind::FortranBlockOpen
+    );
 }

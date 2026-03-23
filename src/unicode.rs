@@ -98,36 +98,36 @@ pub fn replace_unicode(text: &str) -> String {
             '\u{00B1}' => result.push_str("+/-"),
             '\u{00D7}' => result.push('*'),
             '\u{00F7}' => result.push('/'),
-            '\u{2212}' => result.push('-'),     // minus sign
-            '\u{22C5}' => result.push('*'),     // dot operator
+            '\u{2212}' => result.push('-'), // minus sign
+            '\u{22C5}' => result.push('*'), // dot operator
             '\u{2218}' => result.push_str("\\circ"),
-            '\u{00B0}' => result.push_str(" deg"),  // degree
+            '\u{00B0}' => result.push_str(" deg"), // degree
 
             // Dashes (typographic → ASCII hyphen)
-            '\u{2013}' => result.push('-'),     // en dash
-            '\u{2014}' => result.push('-'),     // em dash
-            '\u{2010}' => result.push('-'),     // hyphen
+            '\u{2013}' => result.push('-'), // en dash
+            '\u{2014}' => result.push('-'), // em dash
+            '\u{2010}' => result.push('-'), // hyphen
 
             // Typographic quotes → ASCII
             '\u{201C}' | '\u{201D}' => result.push('"'),
             '\u{2018}' | '\u{2019}' => result.push('\''),
-            '\u{2026}' => result.push_str("..."),  // ellipsis
+            '\u{2026}' => result.push_str("..."), // ellipsis
 
             // Accented Latin (common in author names)
-            '\u{00E9}' => result.push('e'),     // e-acute (Alfven)
-            '\u{00F8}' => result.push('o'),     // o-slash (Norsett)
-            '\u{00FC}' => result.push('u'),     // u-umlaut
-            '\u{00F6}' => result.push('o'),     // o-umlaut
-            '\u{00E4}' => result.push('a'),     // a-umlaut
-            '\u{00E8}' => result.push('e'),     // e-grave
-            '\u{00EA}' => result.push('e'),     // e-circumflex
-            '\u{00E0}' => result.push('a'),     // a-grave
-            '\u{00E1}' => result.push('a'),     // a-acute
-            '\u{00ED}' => result.push('i'),     // i-acute
-            '\u{00F3}' => result.push('o'),     // o-acute
-            '\u{00FA}' => result.push('u'),     // u-acute
-            '\u{00F1}' => result.push('n'),     // n-tilde
-            '\u{00E7}' => result.push('c'),     // c-cedilla
+            '\u{00E9}' => result.push('e'), // e-acute (Alfven)
+            '\u{00F8}' => result.push('o'), // o-slash (Norsett)
+            '\u{00FC}' => result.push('u'), // u-umlaut
+            '\u{00F6}' => result.push('o'), // o-umlaut
+            '\u{00E4}' => result.push('a'), // a-umlaut
+            '\u{00E8}' => result.push('e'), // e-grave
+            '\u{00EA}' => result.push('e'), // e-circumflex
+            '\u{00E0}' => result.push('a'), // a-grave
+            '\u{00E1}' => result.push('a'), // a-acute
+            '\u{00ED}' => result.push('i'), // i-acute
+            '\u{00F3}' => result.push('o'), // o-acute
+            '\u{00FA}' => result.push('u'), // u-acute
+            '\u{00F1}' => result.push('n'), // n-tilde
+            '\u{00E7}' => result.push('c'), // c-cedilla
 
             // Everything else: pass through
             _ => result.push(ch),

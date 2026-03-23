@@ -118,7 +118,9 @@ fn strip_trailing_bang_amp(line: &str) -> String {
     let mut delim = ' ';
     for ch in before.chars() {
         if in_string {
-            if ch == delim { in_string = false; }
+            if ch == delim {
+                in_string = false;
+            }
         } else if ch == '\'' || ch == '"' {
             in_string = true;
             delim = ch;
@@ -148,7 +150,8 @@ pub fn read_logical_lines(source: &str) -> Vec<LogicalLine> {
     let mut i = 0usize;
 
     // Pre-process: strip trailing `!&` and convert `& ! comment` continuations
-    let cleaned: Vec<String> = raw[..raw_count].iter()
+    let cleaned: Vec<String> = raw[..raw_count]
+        .iter()
         .map(|l| strip_amp_comment_continuation(&strip_trailing_bang_amp(l)))
         .collect();
 
