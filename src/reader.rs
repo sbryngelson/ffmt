@@ -104,14 +104,16 @@ fn strip_amp_comment_continuation(line: &str) -> String {
 /// about line continuations. It carries no semantic meaning and can confuse
 /// compilers like Cray ftn that strictly enforce continuation rules.
 fn strip_trailing_bang_amp(line: &str) -> String {
-    let trimmed = line.trim_end();
-    if !trimmed.ends_with("!&") {
+    let mut trimmed = line.trim_end();
+    // Strip all trailing `!&` (may be repeated, e.g., `!&!&`)
+    while trimmed.ends_with("!&") {
+        trimmed = trimmed[..trimmed.len() - 2].trim_end();
+    }
+    if trimmed.len() == line.trim_end().len() {
         return line.to_string();
     }
-    // Verify that `!&` is a comment, not inside a string.
-    // Find the `!` that starts the `!&` and check it's not in a string.
-    let bang_pos = trimmed.len() - 2;
-    let before = &trimmed[..bang_pos];
+    // Verify that stripping is safe (not inside a string)
+    let before = trimmed;
     // Quick check: if `!&` is preceded by something that looks like code or
     // whitespace (not inside a string), strip it.
     let mut in_string = false;

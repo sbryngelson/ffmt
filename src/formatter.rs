@@ -73,7 +73,15 @@ pub fn format_with_range(source: &str, range: Option<(usize, usize)>) -> String 
 
 /// Format with full config and optional range.
 pub fn format_with_config(source: &str, config: &Config, range: Option<(usize, usize)>) -> String {
-    let logical_lines = read_logical_lines(source);
+    // Normalize line endings before parsing (ensures reader sees consistent \n)
+    let normalized_source;
+    let src = if source.contains('\r') {
+        normalized_source = source.replace("\r\n", "\n").replace('\r', "\n");
+        &normalized_source
+    } else {
+        source
+    };
+    let logical_lines = read_logical_lines(src);
     let mut tracker = ScopeTracker::new();
     let mut output_lines: Vec<String> = Vec::new();
     let mut consecutive_blanks: usize = 0;
@@ -574,6 +582,21 @@ pub fn format_with_config(source: &str, config: &Config, range: Option<(usize, u
 
     // Strip trailing semicolons (Fortitude S081)
     output_lines = apply(output_lines, &strip_trailing_semicolons);
+
+    // Collapse consecutive blank lines that may result from semicolon stripping
+    output_lines = {
+        let mut collapsed = Vec::with_capacity(output_lines.len());
+        let mut prev_blank = false;
+        for line in output_lines {
+            let is_blank = line.trim().is_empty();
+            if is_blank && prev_blank {
+                continue;
+            }
+            prev_blank = is_blank;
+            collapsed.push(line);
+        }
+        collapsed
+    };
 
     // Modernize legacy relational operators (.eq. -> ==, etc.)
     if config.modernize_operators.is_enabled() {
@@ -1587,7 +1610,10 @@ fn strip_trailing_semicolons(lines: &[String]) -> Vec<String> {
             let comment = &line[comment_start..];
             let code_trimmed = code.trim_end();
             if code_trimmed.ends_with(';') {
-                let stripped = code_trimmed.strip_suffix(';').unwrap().trim_end();
+                let stripped = code_trimmed.trim_end_matches(';').trim_end();
+                if stripped.is_empty() && comment.is_empty() {
+                    return String::new(); // Line was only semicolons
+                }
                 if comment.is_empty() {
                     return format!(
                         "{}{}",

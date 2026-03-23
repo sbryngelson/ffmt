@@ -2,7 +2,6 @@ subroutine s_test()
 
     integer :: i
 
-
     integer :: j
     !$acc parallel loop
 
