@@ -32,69 +32,101 @@ ffmt --range 10:50 file.fpp      # format only lines 10-50
 
 ## What it does
 
+### Code formatting
 - **Indentation** -- scope-based indentation for all Fortran constructs
 - **Whitespace** -- consistent spacing around operators, commas, colons, parentheses
 - **Keywords** -- case normalization (`IF` -> `if`, `ENDDO` -> `end do`)
+- **Named ends** -- adds procedure/module name to bare `end` statements
 - **Continuation lines** -- normalized with proportional re-indentation
-- **Preprocessor** -- Fypp (`#:if`, `#:for`), OpenACC (`!$acc`), OpenMP (`!$omp`) handled correctly
+- **Line wrapping** -- string-aware rewrapping of long lines (never breaks inside string literals)
+- **Trailing semicolons** -- removed (Fortitude S081)
 
-### Configuration
+### Comment formatting
+- **Comment rewrapping** -- joins and re-wraps `!`/`!!` comment blocks to fill line width
+- **Inline comment spacing** -- enforces 2+ spaces before inline `!` comments (Fortitude S102)
+- **`!<` alignment** -- aligns inline Doxygen comments within declaration groups (2-space minimum)
+- **Comment space** -- ensures space after `!` in regular comments
+- **`!&` cleanup** -- strips trailing `!&` no-op comments that cause Cray ftn errors
+- **`& !` cleanup** -- converts comment-only continuation lines to standalone comments
+
+### Structural formatting
+- **Blank lines after openers** -- removes blank lines after `module`, `subroutine`, `if...then`, `do`, `#ifdef`, `#:if`, etc.
+- **Blank lines before closers** -- removes blank lines before `end`, `#endif`, `#else`, `else`, `case`, etc.
+- **Blank lines after block ends** -- ensures blank line after `end subroutine`/`end function` before next block
+- **Declaration separation** -- ensures blank line between declarations and executable code
+- **`::` alignment** -- vertically aligns `::` in consecutive declaration blocks
+- **Declaration compaction** -- removes blank lines between consecutive declarations
+- **Use compaction** -- removes blank lines between consecutive `use` statements
+
+### Preprocessor support
+- **Fypp** -- `#:if`, `#:for`, `#:call`, `#:def`, `$:`, `@:` macros handled correctly
+- **C preprocessor** -- `#ifdef`, `#ifndef`, `#if`, `#else`, `#endif` preserved
+- **OpenACC** -- `!$acc` directives preserved
+- **OpenMP** -- `!$omp` directives preserved
+
+## Configuration
 
 Create `ffmt.toml` or add `[tool.ffmt]` to `pyproject.toml`. All options have sensible defaults -- most projects need no config file at all.
 
-#### General
+Most options accept `true`, `false`, or `"preserve"`. When set to `"preserve"`, ffmt leaves that aspect of the code untouched.
+
+### General
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `indent-width` | 4 | Number of spaces per indentation level. |
-| `line-length` | 132 | Maximum line length. Code and comments are wrapped at this limit. Set to 1000 to disable wrapping. |
+| `indent-width` | `4` | Number of spaces per indentation level. |
+| `line-length` | `132` | Maximum line length. Code and comments are wrapped at this limit. Set to `1000` to disable wrapping. |
 | `keyword-case` | `"lower"` | Case for Fortran keywords: `"lower"`, `"upper"`, or `"preserve"`. |
-| `normalize-keywords` | true | Split compound keywords like `enddo` into `end do`. |
-| `named-ends` | true | Add procedure/module name to bare `end` statements (`end subroutine` -> `end subroutine s_foo`). |
-| `align-declarations` | true | Vertically align `::` in consecutive declaration blocks. |
-| `unicode-to-ascii` | true | Replace Unicode Greek letters and math symbols with LaTeX equivalents in comments (`σ` -> `\sigma`). |
-| `rewrap-comments` | true | Re-wrap long comments at `line-length`, splitting at word boundaries. Doxygen `!>` / `!!` blocks are joined and re-wrapped as units. |
-| `rewrap-code` | true | Re-wrap long code lines at `line-length` using token-aware splitting (never breaks inside numbers or strings). |
-| `space-after-comment` | true | Ensure a space after `!` in regular comments (`!comment` -> `! comment`). Does not affect `!$acc`, `!<`, `!>`, `!!`, or `!&`. |
-| `collapse-double-spaces` | true | Collapse runs of multiple spaces to a single space in code (not in strings or comments). |
-| `keyword-paren-space` | true | Add a space between control-flow keywords and `(` (`if(` -> `if (`). Applies to `if`, `call`, `allocate`, `select case`, `where`, etc. |
-| `fypp-list-commas` | true | Normalize comma spacing inside Fypp `'[...]'` list arguments. |
-| `indent-fypp` | true | Indent Fypp preprocessor blocks (`#:if`, `#:for`, `#:call`). |
-| `indent-module` | true | Indent the body of `module` and `program` blocks. |
+| `normalize-keywords` | `true` | Split compound keywords like `enddo` into `end do`. Accepts `true`/`false`/`"preserve"`. |
+| `named-ends` | `true` | Add procedure/module name to bare `end` statements. Accepts `true`/`false`/`"preserve"`. |
+| `align-declarations` | `true` | Vertically align `::` in consecutive declaration blocks. |
+| `align-comments` | `true` | Vertically align `!<` inline Doxygen comments in declaration blocks. |
+| `compact-declarations` | `true` | Remove blank lines between consecutive declarations. Accepts `true`/`false`/`"preserve"`. |
+| `compact-use` | `true` | Remove blank lines between consecutive `use` statements. Accepts `true`/`false`/`"preserve"`. |
+| `unicode-to-ascii` | `true` | Replace Unicode Greek letters and math symbols with LaTeX equivalents in comments. |
+| `rewrap-comments` | `true` | Re-wrap long comments at `line-length`. Doxygen `!>`/`!!` blocks are joined and re-wrapped as units. Accepts `true`/`false`/`"preserve"`. |
+| `rewrap-code` | `true` | Re-wrap long code lines at `line-length`. Accepts `true`/`false`/`"preserve"`. |
+| `space-after-comment` | `true` | Ensure a space after `!` in regular comments. Accepts `true`/`false`/`"preserve"`. |
+| `collapse-double-spaces` | `true` | Collapse runs of multiple spaces to a single space in code. |
+| `keyword-paren-space` | `true` | Add a space between keywords and `(` (`if(` -> `if (`). Accepts `true`/`false`/`"preserve"`. |
+| `fypp-list-commas` | `true` | Normalize comma spacing inside Fypp `'[...]'` list arguments. Accepts `true`/`false`/`"preserve"`. |
+| `indent-fypp` | `true` | Indent Fypp preprocessor blocks (`#:if`, `#:for`, `#:call`). |
+| `indent-module` | `true` | Indent the body of `module` and `program` blocks. |
 
-#### Whitespace
+### Whitespace
 
-The `[whitespace]` section controls spacing around specific operators:
+The `[whitespace]` section controls spacing around specific operators. All accept `true`, `false`, or `"preserve"`:
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `relational` | true | Space around `==`, `/=`, `<`, `<=`, `>`, `>=`. |
-| `logical` | true | Space around `.and.`, `.or.`, `.not.`, `.eqv.`, `.neqv.`. |
-| `plusminus` | true | Space around binary `+` and `-`. |
-| `multdiv` | false | Space around `*` and `/`. |
-| `power` | false | Space around `**`. |
-| `assignment` | true | Space around `=` in assignments. |
-| `pointer` | true | Space around `=>`. |
-| `concatenation` | true | Space around `//` (string concatenation). |
-| `declaration` | true | Space around `::` in declarations. |
-| `comma` | true | Space after `,`. |
-| `slice-colon` | false | Space around `:` in array slices. |
+| `relational` | `true` | Space around `==`, `/=`, `<`, `<=`, `>`, `>=`. |
+| `logical` | `true` | Space around `.and.`, `.or.`, `.not.`, `.eqv.`, `.neqv.`. |
+| `plusminus` | `true` | Space around binary `+` and `-`. |
+| `multdiv` | `false` | Space around `*` and `/`. |
+| `power` | `false` | Space around `**`. |
+| `assignment` | `true` | Space around `=` in assignments. |
+| `pointer` | `true` | Space around `=>`. |
+| `concatenation` | `true` | Space around `//` (string concatenation). |
+| `declaration` | `true` | Space around `::` in declarations. |
+| `comma` | `true` | Space after `,`. |
+| `slice-colon` | `false` | Space around `:` in array slices. |
 
-#### Files
+### Files
 
 | Option | Default | Description |
 |--------|---------|-------------|
 | `extensions` | `["fpp", "f90", "F90", "f95", "f03", "F", "F95", "F03"]` | File extensions to format. |
 | `exclude` | `[]` | Glob patterns to exclude. |
-| `respect-gitignore` | true | Skip files listed in `.gitignore`. |
+| `respect-gitignore` | `true` | Skip files listed in `.gitignore`. |
 
-#### Example
+### Example
 
 ```toml
 indent-width = 4
 line-length = 132
 keyword-case = "lower"
 normalize-keywords = true
+rewrap-comments = true
 
 [whitespace]
 relational = true
@@ -110,10 +142,11 @@ comma = true
 ### Preserved as-is
 
 - String literals and inline expressions (`${...}$`, `@{...}@`)
-- Comment contents and Doxygen alignment (`!<`, `!>`, `!!`)
+- Doxygen comment structure (`!<`, `!>`, `!!` associations)
 - Continuation line structure across `#ifdef`/`#:if` preprocessor blocks
 - `#ifdef`/`#endif` blocks (no indentation change)
 - Fypp/Python code inside `$:` and `@:` macro invocations
+- `!$acc` and `!$omp` directive lines
 
 ## Editor integration
 
@@ -164,7 +197,7 @@ vim.lsp.start({
 ```yaml
 repos:
   - repo: https://github.com/sbryngelson/ffmt
-    rev: v0.2.1
+    rev: v0.2.8
     hooks:
       - id: ffmt
 ```
