@@ -1,6 +1,55 @@
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
+/// Tri-state toggle: Enable, Disable, or Preserve (don't touch).
+/// Accepts `true`, `false`, or `"preserve"` in TOML config.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Toggle {
+    Enable,
+    Disable,
+    Preserve,
+}
+
+impl Toggle {
+    pub fn is_enabled(self) -> bool {
+        self == Toggle::Enable
+    }
+}
+
+impl<'de> Deserialize<'de> for Toggle {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de;
+
+        struct ToggleVisitor;
+
+        impl<'de> de::Visitor<'de> for ToggleVisitor {
+            type Value = Toggle;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("true, false, or \"preserve\"")
+            }
+
+            fn visit_bool<E: de::Error>(self, v: bool) -> Result<Toggle, E> {
+                Ok(if v { Toggle::Enable } else { Toggle::Disable })
+            }
+
+            fn visit_str<E: de::Error>(self, v: &str) -> Result<Toggle, E> {
+                match v.to_ascii_lowercase().as_str() {
+                    "true" | "enable" | "on" => Ok(Toggle::Enable),
+                    "false" | "disable" | "off" => Ok(Toggle::Disable),
+                    "preserve" | "keep" => Ok(Toggle::Preserve),
+                    _ => Err(de::Error::unknown_variant(v, &["true", "false", "preserve"])),
+                }
+            }
+        }
+
+        deserializer.deserialize_any(ToggleVisitor)
+    }
+}
+
 /// Configuration for ffmt formatting.
 ///
 /// Defaults match MFC's current style conventions.
@@ -20,7 +69,7 @@ pub struct Config {
     pub keyword_case: KeywordCase,
     /// Normalize compound keywords (enddo -> end do).
     #[serde(rename = "normalize-keywords")]
-    pub normalize_keywords: bool,
+    pub normalize_keywords: Toggle,
     /// Indent Fypp preprocessor blocks.
     #[serde(rename = "indent-fypp")]
     pub indent_fypp: bool,
@@ -29,7 +78,7 @@ pub struct Config {
     pub indent_module: bool,
     /// Add procedure/module name to bare end statements.
     #[serde(rename = "named-ends")]
-    pub named_ends: bool,
+    pub named_ends: Toggle,
     /// Align :: in consecutive declaration blocks.
     #[serde(rename = "align-declarations")]
     pub align_declarations: bool,
@@ -38,31 +87,31 @@ pub struct Config {
     pub align_comments: bool,
     /// Remove blank lines between consecutive declarations.
     #[serde(rename = "compact-declarations")]
-    pub compact_declarations: bool,
+    pub compact_declarations: Toggle,
     /// Remove blank lines between consecutive use statements.
     #[serde(rename = "compact-use")]
-    pub compact_use: bool,
+    pub compact_use: Toggle,
     /// Replace Unicode Greek/math symbols with LaTeX in comments.
     #[serde(rename = "unicode-to-ascii")]
     pub unicode_to_ascii: bool,
     /// Re-wrap long comments at line-length.
     #[serde(rename = "rewrap-comments")]
-    pub rewrap_comments: bool,
+    pub rewrap_comments: Toggle,
     /// Re-wrap long code lines at line-length.
     #[serde(rename = "rewrap-code")]
-    pub rewrap_code: bool,
+    pub rewrap_code: Toggle,
     /// Ensure space after ! in regular comments.
     #[serde(rename = "space-after-comment")]
-    pub space_after_comment: bool,
+    pub space_after_comment: Toggle,
     /// Collapse double spaces to single in code regions.
     #[serde(rename = "collapse-double-spaces")]
     pub collapse_double_spaces: bool,
     /// Add space between keywords and ( (if, call, allocate, etc.).
     #[serde(rename = "keyword-paren-space")]
-    pub keyword_paren_space: bool,
+    pub keyword_paren_space: Toggle,
     /// Normalize comma spacing in Fypp '[...]' list arguments.
     #[serde(rename = "fypp-list-commas")]
-    pub fypp_list_commas: bool,
+    pub fypp_list_commas: Toggle,
     /// Whitespace rules.
     pub whitespace: WhitespaceConfig,
     /// File handling.
@@ -81,28 +130,28 @@ pub enum KeywordCase {
 #[serde(default, deny_unknown_fields)]
 pub struct WhitespaceConfig {
     /// Space around relational operators (==, /=, <, <=, >, >=).
-    pub relational: bool,
+    pub relational: Toggle,
     /// Space around logical operators (.and., .or., .not.).
-    pub logical: bool,
+    pub logical: Toggle,
     /// Space around binary +/-.
-    pub plusminus: bool,
+    pub plusminus: Toggle,
     /// Space around * and /.
-    pub multdiv: bool,
+    pub multdiv: Toggle,
     /// Space around **.
-    pub power: bool,
+    pub power: Toggle,
     /// Space around = in assignments.
-    pub assignment: bool,
+    pub assignment: Toggle,
     /// Space around =>.
-    pub pointer: bool,
+    pub pointer: Toggle,
     /// Space around // (string concatenation).
-    pub concatenation: bool,
+    pub concatenation: Toggle,
     /// Space around :: in declarations.
-    pub declaration: bool,
+    pub declaration: Toggle,
     /// Space after comma.
-    pub comma: bool,
+    pub comma: Toggle,
     /// Space around : in array slices.
     #[serde(rename = "slice-colon")]
-    pub slice_colon: bool,
+    pub slice_colon: Toggle,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -123,21 +172,21 @@ impl Default for Config {
             indent_width: 4,
             line_length: 132,
             keyword_case: KeywordCase::Lower,
-            normalize_keywords: true,
+            normalize_keywords: Toggle::Enable,
             indent_fypp: true,
             indent_module: true,
-            named_ends: true,
+            named_ends: Toggle::Enable,
             align_declarations: true,
             align_comments: true,
-            compact_declarations: true,
-            compact_use: true,
+            compact_declarations: Toggle::Enable,
+            compact_use: Toggle::Enable,
             unicode_to_ascii: true,
-            rewrap_comments: true,
-            rewrap_code: true,
-            space_after_comment: true,
+            rewrap_comments: Toggle::Enable,
+            rewrap_code: Toggle::Enable,
+            space_after_comment: Toggle::Enable,
             collapse_double_spaces: true,
-            keyword_paren_space: true,
-            fypp_list_commas: true,
+            keyword_paren_space: Toggle::Enable,
+            fypp_list_commas: Toggle::Enable,
             whitespace: WhitespaceConfig::default(),
             files: FilesConfig::default(),
         }
@@ -147,17 +196,17 @@ impl Default for Config {
 impl Default for WhitespaceConfig {
     fn default() -> Self {
         WhitespaceConfig {
-            relational: true,
-            logical: true,
-            plusminus: true,
-            multdiv: false,
-            power: false,
-            assignment: true,
-            pointer: true,
-            concatenation: true,
-            declaration: true,
-            comma: true,
-            slice_colon: false,
+            relational: Toggle::Enable,
+            logical: Toggle::Enable,
+            plusminus: Toggle::Enable,
+            multdiv: Toggle::Disable,
+            power: Toggle::Disable,
+            assignment: Toggle::Enable,
+            pointer: Toggle::Enable,
+            concatenation: Toggle::Enable,
+            declaration: Toggle::Enable,
+            comma: Toggle::Enable,
+            slice_colon: Toggle::Disable,
         }
     }
 }
@@ -215,7 +264,6 @@ impl Config {
     }
 }
 
-/// Search upward from `dir` for config files.
 fn find_config_file(dir: &Path) -> Option<PathBuf> {
     let mut current = dir.to_path_buf();
     loop {
@@ -238,7 +286,6 @@ fn find_config_file(dir: &Path) -> Option<PathBuf> {
     None
 }
 
-/// Load config from a file path.
 fn load_config_file(path: &Path) -> Result<Config, String> {
     let content = std::fs::read_to_string(path)
         .map_err(|e| format!("cannot read {}: {e}", path.display()))?;

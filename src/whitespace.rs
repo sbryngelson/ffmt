@@ -773,18 +773,18 @@ fn render(tokens: &[Token], ws: &WhitespaceConfig) -> String {
             Token::Op(kind, op_str) => {
                 // Determine if this operator should have spaces based on config
                 let spaced = match kind {
-                    OpKind::Relational => ws.relational,
-                    OpKind::DotOp => ws.logical,
-                    OpKind::Assignment => ws.assignment,
-                    OpKind::Pointer => ws.pointer,
-                    OpKind::Concat => ws.concatenation,
-                    OpKind::BinaryAddSub => ws.plusminus,
-                    OpKind::DoubleColon => ws.declaration,
-                    OpKind::Multiply => ws.multdiv,
-                    OpKind::Divide => ws.multdiv,
-                    OpKind::Power => ws.power,
-                    OpKind::SliceColon => ws.slice_colon,
-                    OpKind::Comma => ws.comma,
+                    OpKind::Relational => ws.relational.is_enabled(),
+                    OpKind::DotOp => ws.logical.is_enabled(),
+                    OpKind::Assignment => ws.assignment.is_enabled(),
+                    OpKind::Pointer => ws.pointer.is_enabled(),
+                    OpKind::Concat => ws.concatenation.is_enabled(),
+                    OpKind::BinaryAddSub => ws.plusminus.is_enabled(),
+                    OpKind::DoubleColon => ws.declaration.is_enabled(),
+                    OpKind::Multiply => ws.multdiv.is_enabled(),
+                    OpKind::Divide => ws.multdiv.is_enabled(),
+                    OpKind::Power => ws.power.is_enabled(),
+                    OpKind::SliceColon => ws.slice_colon.is_enabled(),
+                    OpKind::Comma => ws.comma.is_enabled(),
                     // These are never configurable:
                     OpKind::KeywordArg
                     | OpKind::UnarySign
