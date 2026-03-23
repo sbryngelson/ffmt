@@ -1,6 +1,6 @@
 use crate::case_norm::normalize_case;
 use crate::classifier::{classify, end_block_keyword, end_statement_has_name, extract_scope_name, LineKind};
-use crate::config::{Config, KeywordCase};
+use crate::config::{Config, EndOfLine, KeywordCase};
 use crate::keyword_norm::normalize_keywords;
 use crate::reader::read_logical_lines;
 use crate::scope::ScopeTracker;
@@ -88,10 +88,41 @@ pub fn format_with_config(
 
     let ll_count = logical_lines.len();
     let mut idx = 0;
+    let mut formatting_disabled = false;
 
     while idx < ll_count {
         let ll = &logical_lines[idx];
         let kind = classify(&ll.joined);
+
+        // Check for ! ffmt off / ! ffmt on markers
+        {
+            let trimmed_lower = ll.joined.trim().to_ascii_lowercase();
+            if trimmed_lower == "! ffmt off" || trimmed_lower == "! ffmt: off" {
+                formatting_disabled = true;
+                for raw_line in &ll.raw_lines {
+                    output_lines.push(raw_line.trim_end().to_string());
+                }
+                idx += 1;
+                continue;
+            }
+            if trimmed_lower == "! ffmt on" || trimmed_lower == "! ffmt: on" {
+                formatting_disabled = false;
+                for raw_line in &ll.raw_lines {
+                    output_lines.push(raw_line.trim_end().to_string());
+                }
+                idx += 1;
+                continue;
+            }
+        }
+
+        // While formatting is disabled, pass lines through verbatim
+        if formatting_disabled {
+            for raw_line in &ll.raw_lines {
+                output_lines.push(raw_line.trim_end().to_string());
+            }
+            idx += 1;
+            continue;
+        }
 
         // Check range
         let last_raw_line = ll.line_number + ll.raw_lines.len() - 1;
@@ -408,57 +439,157 @@ pub fn format_with_config(
         output_lines.pop();
     }
 
+    // Apply post-processing passes, respecting ! ffmt off/on suppression regions
+    let apply = |lines: Vec<String>, f: &dyn Fn(&[String]) -> Vec<String>| -> Vec<String> {
+        apply_respecting_suppression(lines, f)
+    };
+
     // Remove blank lines immediately before block closers/continuations
-    output_lines = remove_blanks_before_closers(&output_lines);
+    output_lines = apply(output_lines, &remove_blanks_before_closers);
 
     // Ensure blank lines after major block closers (before Doxygen, before end module, etc.)
-    output_lines = ensure_blank_after_end(&output_lines);
+    output_lines = apply(output_lines, &ensure_blank_after_end);
 
     // Ensure blank line between declaration block and executable code
-    output_lines = separate_declarations_from_code(&output_lines);
+    output_lines = apply(output_lines, &separate_declarations_from_code);
 
     // Join consecutive short ! comment lines that fit on one line
     if config.rewrap_comments.is_enabled() {
-        output_lines = join_short_comments(&output_lines, config.line_length);
+        let ll = config.line_length;
+        output_lines = apply(output_lines, &|lines| join_short_comments(lines, ll));
     }
 
     // Re-wrap !< inline Doxygen comments with !! continuations (before compaction/alignment)
     if config.rewrap_comments.is_enabled() {
-        output_lines = rewrap_inline_doxygen(&output_lines, config.line_length);
+        let ll = config.line_length;
+        output_lines = apply(output_lines, &|lines| rewrap_inline_doxygen(lines, ll));
     }
     // Compact use statements (after !< rewrap, since rewrap may consume !! lines)
     if config.compact_use.is_enabled() {
-        output_lines = compact_use_statements(&output_lines);
+        output_lines = apply(output_lines, &compact_use_statements);
     }
 
     // Rewrap lines that exceeded line_length after !< comment removal
     if config.rewrap_code.is_enabled() {
-        let mut final_lines: Vec<String> = Vec::new();
-        for line in &output_lines {
-            if line.len() > config.line_length && find_inline_doxygen_in_line(line).is_none()
-                && !line.trim_end().ends_with('&') {
-                final_lines.extend(rewrap_line(line, config.line_length, config.indent_width));
-            } else {
-                final_lines.push(line.clone());
+        let ll = config.line_length;
+        let iw = config.indent_width;
+        output_lines = apply(output_lines, &|lines: &[String]| {
+            let mut final_lines: Vec<String> = Vec::new();
+            for line in lines {
+                if line.len() > ll && find_inline_doxygen_in_line(line).is_none()
+                    && !line.trim_end().ends_with('&') {
+                    final_lines.extend(rewrap_line(line, ll, iw));
+                } else {
+                    final_lines.push(line.clone());
+                }
             }
-        }
-        output_lines = final_lines;
+            final_lines
+        });
+    }
+
+    // Enforce :: separator in variable declarations (before alignment)
+    if config.enforce_double_colon.is_enabled() {
+        output_lines = apply(output_lines, &enforce_double_colon);
     }
 
     // Align :: in consecutive declaration lines
-    if config.align_declarations { output_lines = crate::align::align_declarations(&output_lines, config.compact_declarations.is_enabled(), config.align_comments, config.line_length); }
+    if config.align_declarations {
+        let cd = config.compact_declarations.is_enabled();
+        let ac = config.align_comments;
+        let ll = config.line_length;
+        output_lines = apply(output_lines, &|lines| crate::align::align_declarations(lines, cd, ac, ll));
+    }
 
     // Ensure at least 2 spaces before inline comments (Fortitude S102)
-    // Runs after alignment so !< comments are already positioned
-    output_lines = ensure_two_spaces_before_inline_comment(&output_lines);
+    output_lines = apply(output_lines, &ensure_two_spaces_before_inline_comment);
 
     // Strip trailing semicolons (Fortitude S081)
-    output_lines = strip_trailing_semicolons(&output_lines);
+    output_lines = apply(output_lines, &strip_trailing_semicolons);
+
+    // Modernize legacy relational operators (.eq. -> ==, etc.)
+    if config.modernize_operators.is_enabled() {
+        output_lines = apply(output_lines, &modernize_relational_operators);
+    }
 
     let mut result = output_lines.join("\n");
     if !result.is_empty() && !result.ends_with('\n') {
         result.push('\n');
     }
+
+    // Apply EOL normalization
+    match config.end_of_line {
+        EndOfLine::Lf => {
+            result = result.replace("\r\n", "\n").replace('\r', "\n");
+        }
+        EndOfLine::Crlf => {
+            // First normalize to LF, then convert to CRLF
+            result = result.replace("\r\n", "\n").replace('\r', "\n");
+            result = result.replace('\n', "\r\n");
+        }
+        EndOfLine::Preserve => {}
+    }
+
+    result
+}
+
+/// Check if a line is a `! ffmt off` or `! ffmt on` marker.
+/// Returns Some(true) for off, Some(false) for on, None otherwise.
+fn is_ffmt_marker(line: &str) -> Option<bool> {
+    let t = line.trim().to_ascii_lowercase();
+    if t == "! ffmt off" || t == "! ffmt: off" {
+        Some(true) // off
+    } else if t == "! ffmt on" || t == "! ffmt: on" {
+        Some(false) // on (i.e., not off)
+    } else {
+        None
+    }
+}
+
+/// Apply a post-processing transform function while respecting `! ffmt off`/`! ffmt on`
+/// suppression regions. Lines within suppressed regions are passed through verbatim.
+fn apply_respecting_suppression(
+    lines: Vec<String>,
+    transform: &dyn Fn(&[String]) -> Vec<String>,
+) -> Vec<String> {
+    // Quick check: if no suppression markers exist, apply transform directly
+    let has_markers = lines.iter().any(|l| is_ffmt_marker(l).is_some());
+    if !has_markers {
+        return transform(&lines);
+    }
+
+    // Split into segments: (lines, is_suppressed)
+    let mut result: Vec<String> = Vec::new();
+    let mut current_segment: Vec<String> = Vec::new();
+    let mut suppressed = false;
+
+    for line in &lines {
+        if let Some(is_off) = is_ffmt_marker(line) {
+            // Flush the current segment
+            if !current_segment.is_empty() {
+                if suppressed {
+                    result.append(&mut current_segment);
+                } else {
+                    result.extend(transform(&current_segment));
+                    current_segment.clear();
+                }
+            }
+            // Emit the marker line itself verbatim
+            result.push(line.clone());
+            suppressed = is_off;
+        } else {
+            current_segment.push(line.clone());
+        }
+    }
+
+    // Flush final segment
+    if !current_segment.is_empty() {
+        if suppressed {
+            result.extend(current_segment);
+        } else {
+            result.extend(transform(&current_segment));
+        }
+    }
+
     result
 }
 
@@ -1832,6 +1963,204 @@ fn normalize_fypp_lists(line: &str) -> String {
     }
 
     result
+}
+
+/// Modernize legacy Fortran relational operators to their modern equivalents.
+/// `.eq.` -> `==`, `.ne.` -> `/=`, `.lt.` -> `<`, `.le.` -> `<=`,
+/// `.gt.` -> `>`, `.ge.` -> `>=`.
+/// Skips string literals, comment lines, preprocessor lines, and Fypp lines.
+fn modernize_relational_operators(lines: &[String]) -> Vec<String> {
+    let operators: &[(&str, &str)] = &[
+        (".eq.", "=="),
+        (".ne.", "/="),
+        (".le.", "<="),
+        (".ge.", ">="),
+        (".lt.", "<"),
+        (".gt.", ">"),
+    ];
+
+    lines
+        .iter()
+        .map(|line| {
+            let trimmed = line.trim_start();
+            // Skip comment-only, preprocessor, Fypp lines
+            if trimmed.is_empty()
+                || trimmed.starts_with('!')
+                || trimmed.starts_with('#')
+                || trimmed.starts_with("$:")
+                || trimmed.starts_with("@:")
+            {
+                return line.clone();
+            }
+
+            let bytes = line.as_bytes();
+            let len = bytes.len();
+            let mut result = String::with_capacity(len);
+            let mut i = 0;
+            let mut in_string = false;
+            let mut quote_char = b' ';
+
+            while i < len {
+                if in_string {
+                    if bytes[i] == quote_char {
+                        if i + 1 < len && bytes[i + 1] == quote_char {
+                            result.push(bytes[i] as char);
+                            result.push(bytes[i + 1] as char);
+                            i += 2;
+                            continue;
+                        }
+                        in_string = false;
+                    }
+                    result.push(bytes[i] as char);
+                    i += 1;
+                    continue;
+                }
+
+                if bytes[i] == b'\'' || bytes[i] == b'"' {
+                    in_string = true;
+                    quote_char = bytes[i];
+                    result.push(bytes[i] as char);
+                    i += 1;
+                    continue;
+                }
+
+                // Comment start — copy rest verbatim
+                if bytes[i] == b'!' {
+                    result.push_str(&line[i..]);
+                    return result;
+                }
+
+                // Check for legacy operator
+                if bytes[i] == b'.' {
+                    let mut matched = false;
+                    for &(legacy, modern) in operators {
+                        let legacy_len = legacy.len();
+                        if i + legacy_len <= len {
+                            let candidate: String = bytes[i..i + legacy_len]
+                                .iter()
+                                .map(|&b| (b as char).to_ascii_lowercase())
+                                .collect();
+                            if candidate == legacy {
+                                result.push_str(modern);
+                                i += legacy_len;
+                                matched = true;
+                                break;
+                            }
+                        }
+                    }
+                    if matched {
+                        continue;
+                    }
+                }
+
+                result.push(bytes[i] as char);
+                i += 1;
+            }
+
+            result
+        })
+        .collect()
+}
+
+/// Enforce `::` separator in variable declarations that are missing it.
+/// E.g., `integer x` -> `integer :: x`, `type(foo) bar` -> `type(foo) :: bar`.
+fn enforce_double_colon(lines: &[String]) -> Vec<String> {
+    use regex::Regex;
+    use std::sync::OnceLock;
+
+    // Match simple type declarations without ::
+    // Group 1: indent + type keyword (+ optional kind/attributes)
+    // Group 2: variable name(s)
+    static RE_SIMPLE: OnceLock<Regex> = OnceLock::new();
+    let re_simple = RE_SIMPLE.get_or_init(|| {
+        Regex::new(r"(?i)^(\s*(?:integer|real|logical|complex|character|double\s+precision)(?:\s*\([^)]*\))?(?:\s*,\s*(?:intent\s*\([^)]*\)|dimension\s*\([^)]*\)|allocatable|pointer|target|optional|save|parameter|value|contiguous|external|intrinsic|volatile|asynchronous|protected|private|public))*)\s+([a-zA-Z_]\w*.*)$").unwrap()
+    });
+
+    // Match type()/class() declarations without ::
+    static RE_TYPED: OnceLock<Regex> = OnceLock::new();
+    let re_typed = RE_TYPED.get_or_init(|| {
+        Regex::new(r"(?i)^(\s*(?:type|class)\s*\([^)]*\)(?:\s*,\s*(?:intent\s*\([^)]*\)|dimension\s*\([^)]*\)|allocatable|pointer|target|optional|save|parameter|value|contiguous|external|intrinsic|volatile|asynchronous|protected|private|public))*)\s+([a-zA-Z_]\w*.*)$").unwrap()
+    });
+
+    // Non-declaration keywords that might look like declarations
+    static RE_SKIP: OnceLock<Regex> = OnceLock::new();
+    let re_skip = RE_SKIP.get_or_init(|| {
+        Regex::new(r"(?i)^\s*(?:if|do|else|end|call|return|write|read|print|open|close|format|go\s*to|select|case|where|forall|block|associate|critical|sync|lock|unlock|event|error|stop|exit|cycle|continue|contains|implicit|use|module|program|subroutine|function|interface|abstract|procedure|entry|include|equivalence|common|data|namelist|save|allocate|deallocate|nullify|inquire|rewind|backspace|endfile|flush|wait|type\s+is|class\s+is|class\s+default|rank\s+default|rank\s*\()\b").unwrap()
+    });
+
+    lines
+        .iter()
+        .map(|line| {
+            let trimmed = line.trim_start();
+
+            // Skip blank, comment, preprocessor, Fypp lines
+            if trimmed.is_empty()
+                || trimmed.starts_with('!')
+                || trimmed.starts_with('#')
+                || trimmed.starts_with("$:")
+                || trimmed.starts_with("@:")
+                || trimmed.starts_with("#:")
+            {
+                return line.clone();
+            }
+
+            // Skip lines that already contain ::
+            if line.contains("::") {
+                return line.clone();
+            }
+
+            // Skip non-declaration keywords
+            if re_skip.is_match(line) {
+                return line.clone();
+            }
+
+            // Skip function/subroutine signatures (e.g., "logical elemental function f_foo")
+            let lower = trimmed.to_ascii_lowercase();
+            if lower.contains("function ") || lower.contains("subroutine ") {
+                return line.clone();
+            }
+
+            // Skip lines ending with & (continuations)
+            if trimmed.ends_with('&') {
+                return line.clone();
+            }
+
+            // Try simple type match
+            if let Some(caps) = re_simple.captures(line) {
+                let type_part = caps.get(1).unwrap().as_str();
+                let var_part = caps.get(2).unwrap().as_str();
+
+                // Don't insert :: if var_part is a keyword (e.g., "integer function foo")
+                let var_lower = var_part.trim().to_ascii_lowercase();
+                if var_lower.starts_with("function ")
+                    || var_lower.starts_with("subroutine ")
+                    || var_lower.starts_with("module ")
+                    || var_lower.starts_with("program ")
+                {
+                    return line.clone();
+                }
+
+                return format!("{} :: {}", type_part.trim_end(), var_part.trim_start());
+            }
+
+            // Try type()/class() match
+            if let Some(caps) = re_typed.captures(line) {
+                let type_part = caps.get(1).unwrap().as_str();
+                let var_part = caps.get(2).unwrap().as_str();
+
+                let var_lower = var_part.trim().to_ascii_lowercase();
+                if var_lower.starts_with("function ")
+                    || var_lower.starts_with("subroutine ")
+                {
+                    return line.clone();
+                }
+
+                return format!("{} :: {}", type_part.trim_end(), var_part.trim_start());
+            }
+
+            line.clone()
+        })
+        .collect()
 }
 
 /// Normalize comma spacing: ensure exactly one space after each comma.

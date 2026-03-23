@@ -112,6 +112,15 @@ pub struct Config {
     /// Normalize comma spacing in Fypp '[...]' list arguments.
     #[serde(rename = "fypp-list-commas")]
     pub fypp_list_commas: Toggle,
+    /// Line ending normalization: "lf", "crlf", or "preserve".
+    #[serde(rename = "end-of-line")]
+    pub end_of_line: EndOfLine,
+    /// Modernize legacy relational operators (.eq. -> ==). Accepts true/false/"preserve".
+    #[serde(rename = "modernize-operators")]
+    pub modernize_operators: Toggle,
+    /// Enforce :: separator in variable declarations. Accepts true/false/"preserve".
+    #[serde(rename = "enforce-double-colon")]
+    pub enforce_double_colon: Toggle,
     /// Whitespace rules.
     pub whitespace: WhitespaceConfig,
     /// File handling.
@@ -123,6 +132,15 @@ pub struct Config {
 pub enum KeywordCase {
     Lower,
     Upper,
+    Preserve,
+}
+
+/// Line ending normalization mode.
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum EndOfLine {
+    Lf,
+    Crlf,
     Preserve,
 }
 
@@ -187,6 +205,9 @@ impl Default for Config {
             collapse_double_spaces: true,
             keyword_paren_space: Toggle::Enable,
             fypp_list_commas: Toggle::Enable,
+            end_of_line: EndOfLine::Lf,
+            modernize_operators: Toggle::Enable,
+            enforce_double_colon: Toggle::Enable,
             whitespace: WhitespaceConfig::default(),
             files: FilesConfig::default(),
         }
