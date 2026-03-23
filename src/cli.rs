@@ -19,12 +19,16 @@ const CACHE_DIR: &str = ".ffmt_cache";
 )]
 struct Args {
     /// Files or directories to format. Use `-` for stdin.
-    #[arg(required_unless_present = "lsp")]
+    #[arg(required_unless_present_any = ["lsp", "dump_config"])]
     paths: Vec<String>,
 
     /// Run as LSP server (for editor integration)
     #[arg(long)]
     lsp: bool,
+
+    /// Print the resolved configuration and exit
+    #[arg(long = "dump-config")]
+    dump_config: bool,
 
     /// Check if files are formatted (exit 1 if not)
     #[arg(long)]
@@ -138,18 +142,24 @@ pub fn run() {
 
     // Load config from ffmt.toml or pyproject.toml
     let config = {
-        let search_dir = if args.paths.len() == 1 && args.paths[0] == "-" {
-            std::env::current_dir().unwrap_or_default()
-        } else {
+        let search_dir = if !args.paths.is_empty() && args.paths[0] != "-" {
             let p = PathBuf::from(&args.paths[0]);
             if p.is_file() {
                 p.parent().map(|p| p.to_path_buf()).unwrap_or_default()
             } else {
                 p.clone()
             }
+        } else {
+            std::env::current_dir().unwrap_or_default()
         };
         crate::config::Config::find_and_load(&search_dir)
     };
+
+    // Dump config mode
+    if args.dump_config {
+        println!("{:#?}", config);
+        return;
+    }
 
     // quiet wins over verbose if both given
     let quiet = args.quiet;
