@@ -71,7 +71,7 @@ multdiv = false
 # pre-commit
 repos:
   - repo: https://github.com/sbryngelson/ffmt
-    rev: v0.2.8
+    rev: v0.3.0
     hooks:
       - id: ffmt
 ```
