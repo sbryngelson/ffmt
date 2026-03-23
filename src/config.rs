@@ -38,7 +38,7 @@ impl<'de> Deserialize<'de> for Toggle {
 
             fn visit_str<E: de::Error>(self, v: &str) -> Result<Toggle, E> {
                 match v.to_ascii_lowercase().as_str() {
-                    "true" | "enable" | "on" => Ok(Toggle::Enable),
+                    "true" | "enable" | "on" | "one-per-line" => Ok(Toggle::Enable),
                     "false" | "disable" | "off" => Ok(Toggle::Disable),
                     "preserve" | "keep" => Ok(Toggle::Preserve),
                     _ => Err(de::Error::unknown_variant(v, &["true", "false", "preserve"])),
@@ -121,6 +121,19 @@ pub struct Config {
     /// Enforce :: separator in variable declarations. Accepts true/false/"preserve".
     #[serde(rename = "enforce-double-colon")]
     pub enforce_double_colon: Toggle,
+    /// Split semicolon-separated statements onto separate lines. Accepts true/false/"preserve".
+    #[serde(rename = "split-statements")]
+    pub split_statements: Toggle,
+    /// Align trailing & continuation markers at column limit. Accepts true/false/"preserve".
+    #[serde(rename = "align-ampersand")]
+    pub align_ampersand: Toggle,
+    /// Align = in consecutive assignment statements. Accepts true/false/"preserve".
+    #[serde(rename = "align-assignments")]
+    pub align_assignments: Toggle,
+    /// Reformat use-statement imports. "one-per-line" puts each imported name on its own line.
+    /// Accepts "one-per-line", false, or "preserve".
+    #[serde(rename = "use-formatting")]
+    pub use_formatting: Toggle,
     /// Whitespace rules.
     pub whitespace: WhitespaceConfig,
     /// File handling.
@@ -208,6 +221,10 @@ impl Default for Config {
             end_of_line: EndOfLine::Lf,
             modernize_operators: Toggle::Enable,
             enforce_double_colon: Toggle::Enable,
+            split_statements: Toggle::Disable,
+            align_ampersand: Toggle::Disable,
+            align_assignments: Toggle::Disable,
+            use_formatting: Toggle::Disable,
             whitespace: WhitespaceConfig::default(),
             files: FilesConfig::default(),
         }

@@ -444,6 +444,17 @@ pub fn format_with_config(
         apply_respecting_suppression(lines, f)
     };
 
+    // Split semicolon-separated statements (early, before alignment)
+    if config.split_statements.is_enabled() {
+        output_lines = apply(output_lines, &split_multi_statements);
+    }
+
+    // Reformat use statements (one import per line)
+    if config.use_formatting.is_enabled() {
+        let iw = config.indent_width;
+        output_lines = apply(output_lines, &|lines| reformat_use_statements(lines, iw));
+    }
+
     // Remove blank lines immediately before block closers/continuations
     output_lines = apply(output_lines, &remove_blanks_before_closers);
 
@@ -509,6 +520,18 @@ pub fn format_with_config(
     // Modernize legacy relational operators (.eq. -> ==, etc.)
     if config.modernize_operators.is_enabled() {
         output_lines = apply(output_lines, &modernize_relational_operators);
+    }
+
+    // Align = in consecutive assignment statements
+    if config.align_assignments.is_enabled() {
+        let ll = config.line_length;
+        output_lines = apply(output_lines, &|lines| align_assignments(lines, ll));
+    }
+
+    // Align trailing & continuation markers at column limit
+    if config.align_ampersand.is_enabled() {
+        let ll = config.line_length;
+        output_lines = apply(output_lines, &|lines| align_ampersands(lines, ll));
     }
 
     let mut result = output_lines.join("\n");
@@ -2161,6 +2184,354 @@ fn enforce_double_colon(lines: &[String]) -> Vec<String> {
             line.clone()
         })
         .collect()
+}
+
+/// Split semicolon-separated statements onto separate lines.
+/// Preserves `private; public ::` as an idiomatic Fortran pattern.
+fn split_multi_statements(lines: &[String]) -> Vec<String> {
+    let mut result: Vec<String> = Vec::new();
+
+    for line in lines {
+        let trimmed = line.trim_start();
+        // Skip blank, comment, preprocessor, Fypp lines
+        if trimmed.is_empty()
+            || trimmed.starts_with('!')
+            || trimmed.starts_with('#')
+            || trimmed.starts_with("$:")
+            || trimmed.starts_with("@:")
+        {
+            result.push(line.clone());
+            continue;
+        }
+
+        // Check for `private; public ::` pattern (case-insensitive)
+        let lower = trimmed.to_ascii_lowercase();
+        if lower.starts_with("private") && lower.contains("; public") {
+            result.push(line.clone());
+            continue;
+        }
+
+        // Find semicolons outside strings
+        let indent = leading_spaces(line);
+        let indent_str = " ".repeat(indent);
+        let bytes = trimmed.as_bytes();
+        let len = bytes.len();
+        let mut in_string = false;
+        let mut quote_char = b' ';
+        let mut semicolons: Vec<usize> = Vec::new();
+
+        for i in 0..len {
+            if in_string {
+                if bytes[i] == quote_char {
+                    if i + 1 < len && bytes[i + 1] == quote_char {
+                        continue;
+                    }
+                    in_string = false;
+                }
+                continue;
+            }
+            if bytes[i] == b'\'' || bytes[i] == b'"' {
+                in_string = true;
+                quote_char = bytes[i];
+                continue;
+            }
+            if bytes[i] == b'!' {
+                break; // rest is comment
+            }
+            if bytes[i] == b';' {
+                semicolons.push(i);
+            }
+        }
+
+        if semicolons.is_empty() {
+            result.push(line.clone());
+            continue;
+        }
+
+        // Split at semicolons
+        let mut start = 0;
+        for &semi_pos in &semicolons {
+            let stmt = trimmed[start..semi_pos].trim();
+            if !stmt.is_empty() {
+                result.push(format!("{}{}", indent_str, stmt));
+            }
+            start = semi_pos + 1;
+        }
+        // Remaining after last semicolon
+        let remainder = trimmed[start..].trim();
+        if !remainder.is_empty() {
+            result.push(format!("{}{}", indent_str, remainder));
+        }
+    }
+
+    result
+}
+
+/// Align trailing `&` continuation markers at the column limit.
+/// Lines ending with ` &` are padded so `&` sits at the column limit position.
+fn align_ampersands(lines: &[String], col_limit: usize) -> Vec<String> {
+    lines
+        .iter()
+        .map(|line| {
+            let trimmed_start = line.trim_start();
+            // Skip blank, comment, preprocessor, Fypp lines
+            if trimmed_start.is_empty()
+                || trimmed_start.starts_with('!')
+                || trimmed_start.starts_with('#')
+                || trimmed_start.starts_with("$:")
+                || trimmed_start.starts_with("@:")
+            {
+                return line.clone();
+            }
+
+            // Check if line ends with " &"
+            let trimmed_end = line.trim_end();
+            if !trimmed_end.ends_with(" &") {
+                return line.clone();
+            }
+
+            let current_len = trimmed_end.len();
+            if current_len >= col_limit {
+                return line.clone(); // already at or past limit
+            }
+
+            // Remove trailing " &", pad to col_limit - 1, then add "&"
+            let code_part = trimmed_end[..trimmed_end.len() - 2].trim_end();
+            let code_len = code_part.len();
+            if code_len >= col_limit {
+                return line.clone(); // code itself is too long
+            }
+
+            let padding = col_limit - 1 - code_len;
+            format!("{}{}&", code_part, " ".repeat(padding))
+        })
+        .collect()
+}
+
+/// Align `=` signs across consecutive assignment statements.
+/// Only aligns standalone `=` (not `==`, `/=`, `<=`, `>=`, `=>`, `::`).
+fn align_assignments(lines: &[String], max_length: usize) -> Vec<String> {
+    let mut result: Vec<String> = Vec::with_capacity(lines.len());
+    let mut i = 0;
+
+    while i < lines.len() {
+        // Try to start a group of consecutive assignment lines
+        let group_start = i;
+        let mut group: Vec<usize> = Vec::new(); // indices into lines
+        let mut eq_columns: Vec<usize> = Vec::new(); // column of `=` in each line
+
+        while i < lines.len() {
+            if let Some(eq_col) = find_assignment_eq(&lines[i]) {
+                group.push(i);
+                eq_columns.push(eq_col);
+                i += 1;
+            } else {
+                break;
+            }
+        }
+
+        if group.len() < 2 {
+            // Not a group, emit line(s) unchanged
+            for idx in group_start..i.max(group_start + 1) {
+                if idx < lines.len() {
+                    result.push(lines[idx].clone());
+                }
+            }
+            if i == group_start {
+                i += 1;
+            }
+            continue;
+        }
+
+        // Find the maximum `=` column in the group
+        let max_eq_col = *eq_columns.iter().max().unwrap();
+
+        // Align all lines in the group
+        for (gi, &line_idx) in group.iter().enumerate() {
+            let line = &lines[line_idx];
+            let eq_col = eq_columns[gi];
+            if eq_col == max_eq_col {
+                result.push(line.clone());
+            } else {
+                let padding = max_eq_col - eq_col;
+                // Insert padding before the `=`
+                let before_eq = &line[..eq_col];
+                let from_eq = &line[eq_col..];
+                let new_line = format!("{}{}{}", before_eq.trim_end(), " ".repeat(padding + 1), from_eq.trim_start());
+                // Check if alignment would exceed max_length
+                if new_line.len() <= max_length {
+                    result.push(new_line);
+                } else {
+                    result.push(line.clone());
+                }
+            }
+        }
+    }
+
+    result
+}
+
+/// Find the column of a standalone `=` in an assignment statement.
+/// Returns None if the line is not an assignment or is a comment/blank/etc.
+/// Skips `==`, `/=`, `<=`, `>=`, `=>`, and `=` inside strings or parens.
+fn find_assignment_eq(line: &str) -> Option<usize> {
+    let trimmed = line.trim_start();
+    // Skip blank, comment, preprocessor, Fypp, use, implicit lines
+    if trimmed.is_empty()
+        || trimmed.starts_with('!')
+        || trimmed.starts_with('#')
+        || trimmed.starts_with("$:")
+        || trimmed.starts_with("@:")
+    {
+        return None;
+    }
+
+    let lower = trimmed.to_ascii_lowercase();
+    // Skip declarations, use statements, etc.
+    if lower.starts_with("use ") || lower.starts_with("implicit ") || lower.contains("::") {
+        return None;
+    }
+
+    let bytes = line.as_bytes();
+    let len = bytes.len();
+    let mut in_string = false;
+    let mut quote_char = b' ';
+    let mut paren_depth = 0i32;
+
+    for i in 0..len {
+        if in_string {
+            if bytes[i] == quote_char {
+                if i + 1 < len && bytes[i + 1] == quote_char {
+                    continue;
+                }
+                in_string = false;
+            }
+            continue;
+        }
+        if bytes[i] == b'\'' || bytes[i] == b'"' {
+            in_string = true;
+            quote_char = bytes[i];
+            continue;
+        }
+        if bytes[i] == b'!' {
+            break;
+        }
+        if bytes[i] == b'(' || bytes[i] == b'[' {
+            paren_depth += 1;
+        } else if bytes[i] == b')' || bytes[i] == b']' {
+            paren_depth -= 1;
+            if paren_depth < 0 {
+                paren_depth = 0;
+            }
+        }
+
+        if bytes[i] == b'=' && paren_depth == 0 {
+            // Check it's not ==, /=, <=, >=, =>
+            let prev = if i > 0 { bytes[i - 1] } else { b' ' };
+            let next = if i + 1 < len { bytes[i + 1] } else { b' ' };
+            if next == b'=' || next == b'>' {
+                continue;
+            }
+            if prev == b'/' || prev == b'<' || prev == b'>' || prev == b'=' || prev == b'!' {
+                continue;
+            }
+            return Some(i);
+        }
+    }
+
+    None
+}
+
+/// Reformat `use` statements with `only:` to have one item per line.
+fn reformat_use_statements(lines: &[String], indent_width: usize) -> Vec<String> {
+    let mut result: Vec<String> = Vec::new();
+
+    for line in lines {
+        let trimmed = line.trim_start();
+        let lower = trimmed.to_ascii_lowercase();
+
+        // Skip non-use lines, Fypp-conditional use statements
+        if !lower.starts_with("use ") || trimmed.starts_with("#") || trimmed.starts_with("$:") || trimmed.starts_with("@:") {
+            result.push(line.clone());
+            continue;
+        }
+
+        // Check for `only:`
+        let only_pos = match lower.find("only:") {
+            Some(pos) => pos,
+            None => {
+                result.push(line.clone());
+                continue;
+            }
+        };
+
+        let indent = leading_spaces(line);
+        let indent_str = " ".repeat(indent);
+        let cont_indent = " ".repeat(indent + indent_width);
+
+        // Extract part before `only:` and the import list after it
+        let before_only = &trimmed[..only_pos + 5]; // includes "only:"
+        let imports_str = trimmed[only_pos + 5..].trim();
+
+        // Remove trailing comment if present
+        let (imports_str, _trailing_comment) = {
+            let bytes = imports_str.as_bytes();
+            let mut in_str = false;
+            let mut qch = b' ';
+            let mut comment_pos = None;
+            for i in 0..bytes.len() {
+                if in_str {
+                    if bytes[i] == qch {
+                        if i + 1 < bytes.len() && bytes[i + 1] == qch {
+                            continue;
+                        }
+                        in_str = false;
+                    }
+                    continue;
+                }
+                if bytes[i] == b'\'' || bytes[i] == b'"' {
+                    in_str = true;
+                    qch = bytes[i];
+                    continue;
+                }
+                if bytes[i] == b'!' {
+                    comment_pos = Some(i);
+                    break;
+                }
+            }
+            match comment_pos {
+                Some(pos) => (imports_str[..pos].trim(), Some(imports_str[pos..].trim())),
+                None => (imports_str, None),
+            }
+        };
+
+        // Also handle continuation lines: if line ends with &, collect continuations
+        // For simplicity, handle single-line use statements only
+        if line.trim_end().ends_with('&') {
+            result.push(line.clone());
+            continue;
+        }
+
+        // Parse comma-separated imports
+        let imports: Vec<&str> = imports_str.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+
+        if imports.len() <= 1 {
+            result.push(line.clone());
+            continue;
+        }
+
+        // Emit reformatted: one import per line
+        result.push(format!("{}{} &", indent_str, before_only));
+        for (idx, import) in imports.iter().enumerate() {
+            if idx < imports.len() - 1 {
+                result.push(format!("{}& {}, &", cont_indent, import));
+            } else {
+                result.push(format!("{}& {}", cont_indent, import));
+            }
+        }
+    }
+
+    result
 }
 
 /// Normalize comma spacing: ensure exactly one space after each comma.
