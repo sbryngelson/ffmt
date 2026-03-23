@@ -1,3 +1,4 @@
 /target/
 .ffmt_cache/
 Cargo.lock
+site/
