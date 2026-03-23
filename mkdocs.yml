@@ -1,0 +1,41 @@
+site_name: ffmt
+site_description: A fast, configurable Fortran formatter
+site_url: https://ffmt.readthedocs.io
+repo_url: https://github.com/sbryngelson/ffmt
+repo_name: sbryngelson/ffmt
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - content.code.copy
+    - navigation.sections
+    - navigation.expand
+    - toc.follow
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - tables
+  - toc:
+      permalink: true
+
+nav:
+  - Home: index.md
+  - Getting Started: getting-started.md
+  - Configuration: configuration.md
+  - Editor Integration: editors.md
+  - CI Integration: ci.md
