@@ -40,6 +40,12 @@ ffmt --range 10:50 file.fpp      # format only lines 10-50
 - **Continuation lines** -- normalized with proportional re-indentation
 - **Line wrapping** -- string-aware rewrapping of long lines (never breaks inside string literals)
 - **Trailing semicolons** -- removed (Fortitude S081)
+- **Double-colon enforcement** -- adds `::` to declarations missing it (`integer x` -> `integer :: x`)
+- **Relational operator modernization** -- converts legacy operators (`.eq.` -> `==`, `.ne.` -> `/=`, etc.)
+- **Multi-statement splitting** -- splits `x = 1; y = 2` onto separate lines (opt-in)
+- **Assignment alignment** -- aligns `=` across consecutive assignments (opt-in)
+- **Use-statement reformatting** -- one import per line for `use, only:` (opt-in)
+- **EOL normalization** -- normalize line endings to LF or CRLF
 
 ### Comment formatting
 - **Comment rewrapping** -- joins and re-wraps `!`/`!!` comment blocks to fill line width
@@ -48,6 +54,7 @@ ffmt --range 10:50 file.fpp      # format only lines 10-50
 - **Comment space** -- ensures space after `!` in regular comments
 - **`!&` cleanup** -- strips trailing `!&` no-op comments that cause Cray ftn errors
 - **`& !` cleanup** -- converts comment-only continuation lines to standalone comments
+- **Format suppression** -- `! ffmt off` / `! ffmt on` to skip formatting for code regions
 
 ### Structural formatting
 - **Blank lines after openers** -- removes blank lines after `module`, `subroutine`, `if...then`, `do`, `#ifdef`, `#:if`, etc.
@@ -57,6 +64,7 @@ ffmt --range 10:50 file.fpp      # format only lines 10-50
 - **`::` alignment** -- vertically aligns `::` in consecutive declaration blocks
 - **Declaration compaction** -- removes blank lines between consecutive declarations
 - **Use compaction** -- removes blank lines between consecutive `use` statements
+- **Continuation `&` alignment** -- align trailing `&` at column limit (opt-in)
 
 ### Preprocessor support
 - **Fypp** -- `#:if`, `#:for`, `#:call`, `#:def`, `$:`, `@:` macros handled correctly
@@ -92,6 +100,13 @@ Most options accept `true`, `false`, or `"preserve"`. When set to `"preserve"`, 
 | `fypp-list-commas` | `true` | Normalize comma spacing inside Fypp `'[...]'` list arguments. Accepts `true`/`false`/`"preserve"`. |
 | `indent-fypp` | `true` | Indent Fypp preprocessor blocks (`#:if`, `#:for`, `#:call`). |
 | `indent-module` | `true` | Indent the body of `module` and `program` blocks. |
+| `end-of-line` | `"lf"` | Line ending normalization: `"lf"`, `"crlf"`, or `"preserve"`. |
+| `modernize-operators` | `true` | Convert legacy relational operators to modern form (`.eq.` -> `==`). Accepts `true`/`false`/`"preserve"`. |
+| `enforce-double-colon` | `true` | Add `::` to declarations missing it (`integer x` -> `integer :: x`). Accepts `true`/`false`/`"preserve"`. |
+| `split-statements` | `false` | Split semicolon-separated statements onto separate lines. Preserves `private; public ::`. Accepts `true`/`false`/`"preserve"`. |
+| `align-ampersand` | `false` | Align trailing `&` continuation markers at column limit. Accepts `true`/`false`/`"preserve"`. |
+| `align-assignments` | `false` | Align `=` in consecutive assignment statements. Accepts `true`/`false`/`"preserve"`. |
+| `use-formatting` | `false` | Reformat `use, only:` imports to one per line. Accepts `true`/`"one-per-line"`/`false`/`"preserve"`. |
 
 ### Whitespace
 
@@ -127,6 +142,15 @@ line-length = 132
 keyword-case = "lower"
 normalize-keywords = true
 rewrap-comments = true
+modernize-operators = true
+enforce-double-colon = true
+end-of-line = "lf"
+
+# Opt-in features (default: false)
+# split-statements = true
+# align-ampersand = true
+# align-assignments = true
+# use-formatting = "one-per-line"
 
 [whitespace]
 relational = true
@@ -139,8 +163,21 @@ declaration = true
 comma = true
 ```
 
+### Format suppression
+
+Disable formatting for specific code regions with `! ffmt off` and `! ffmt on`:
+
+```fortran
+! ffmt off
+x    =    1       ! preserved exactly as written
+y=2;z=3
+! ffmt on
+w = 4              ! formatted normally
+```
+
 ### Preserved as-is
 
+- Code between `! ffmt off` and `! ffmt on` markers
 - String literals and inline expressions (`${...}$`, `@{...}@`)
 - Doxygen comment structure (`!<`, `!>`, `!!` associations)
 - Continuation line structure across `#ifdef`/`#:if` preprocessor blocks
