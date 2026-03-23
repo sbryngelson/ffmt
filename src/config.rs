@@ -308,9 +308,12 @@ impl Config {
 fn find_config_file(dir: &Path) -> Option<PathBuf> {
     let mut current = dir.to_path_buf();
     loop {
-        let candidate = current.join("ffmt.toml");
-        if candidate.is_file() {
-            return Some(candidate);
+        // Check ffmt.toml, then .ffmt.toml (hidden), then pyproject.toml
+        for name in ["ffmt.toml", ".ffmt.toml"] {
+            let candidate = current.join(name);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
         }
         let candidate = current.join("pyproject.toml");
         if candidate.is_file() {
