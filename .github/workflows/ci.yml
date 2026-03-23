@@ -126,7 +126,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [cpu, gpu-acc, gpu-omp]
+        target: [cpu, gpu-omp]
     steps:
       - uses: actions/checkout@v4
 
