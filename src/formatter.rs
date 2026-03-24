@@ -517,6 +517,9 @@ pub fn format_with_config(source: &str, config: &Config, range: Option<(usize, u
         output_lines = apply(output_lines, &|lines| reformat_use_statements(lines, iw));
     }
 
+    // Ensure blank line before and after `implicit none`
+    output_lines = apply(output_lines, &ensure_implicit_none_spacing);
+
     // Remove blank lines immediately before block closers/continuations
     output_lines = apply(output_lines, &remove_blanks_before_closers);
 
@@ -1179,6 +1182,36 @@ fn compact_use_statements(lines: &[String]) -> Vec<String> {
         result.push(line.clone());
     }
 
+    result
+}
+
+/// Ensure one blank line before and after `implicit none`.
+/// The blank line before separates it from `use` statements.
+/// The blank line after separates it from declarations.
+fn ensure_implicit_none_spacing(lines: &[String]) -> Vec<String> {
+    let mut result = Vec::with_capacity(lines.len() + 4);
+    for (i, line) in lines.iter().enumerate() {
+        let trimmed = line.trim().to_ascii_lowercase();
+        if trimmed == "implicit none" {
+            // Ensure blank line before (unless at start or already blank)
+            if i > 0 {
+                let prev = result
+                    .last()
+                    .map(|s: &String| s.trim().is_empty())
+                    .unwrap_or(true);
+                if !prev {
+                    result.push(String::new());
+                }
+            }
+            result.push(line.clone());
+            // Ensure blank line after (unless next is blank or end)
+            if i + 1 < lines.len() && !lines[i + 1].trim().is_empty() {
+                result.push(String::new());
+            }
+        } else {
+            result.push(line.clone());
+        }
+    }
     result
 }
 
