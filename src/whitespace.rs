@@ -736,8 +736,8 @@ fn is_io_format_star(tokens: &[Token]) -> bool {
 fn is_slice_comma(tokens: &[Token], idx: usize) -> bool {
     // Look backward from idx for a SliceColon at the same nesting level
     let mut depth: i32 = 0;
-    for i in (0..idx).rev() {
-        match &tokens[i] {
+    for token in tokens[..idx].iter().rev() {
+        match token {
             Token::Op(OpKind::CloseParen, _) => depth += 1,
             Token::Op(OpKind::OpenParen, _) => {
                 if depth == 0 {
@@ -752,8 +752,8 @@ fn is_slice_comma(tokens: &[Token], idx: usize) -> bool {
     }
     // Look forward from idx for a SliceColon at the same nesting level
     depth = 0;
-    for i in (idx + 1)..tokens.len() {
-        match &tokens[i] {
+    for token in tokens.iter().skip(idx + 1) {
+        match token {
             Token::Op(OpKind::OpenParen, _) => depth += 1,
             Token::Op(OpKind::CloseParen, _) => {
                 if depth == 0 {
