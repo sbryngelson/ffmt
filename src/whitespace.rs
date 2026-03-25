@@ -730,6 +730,45 @@ fn is_io_format_star(tokens: &[Token]) -> bool {
     false
 }
 
+/// Check if a comma at `idx` is inside a slice expression.
+/// A comma is a "slice comma" if either the preceding or following dimension
+/// (at the same paren depth) contains a SliceColon.
+fn is_slice_comma(tokens: &[Token], idx: usize) -> bool {
+    // Look backward from idx for a SliceColon at the same nesting level
+    let mut depth: i32 = 0;
+    for i in (0..idx).rev() {
+        match &tokens[i] {
+            Token::Op(OpKind::CloseParen, _) => depth += 1,
+            Token::Op(OpKind::OpenParen, _) => {
+                if depth == 0 {
+                    break;
+                }
+                depth -= 1;
+            }
+            Token::Op(OpKind::SliceColon, _) if depth == 0 => return true,
+            Token::Op(OpKind::Comma, _) if depth == 0 => break,
+            _ => {}
+        }
+    }
+    // Look forward from idx for a SliceColon at the same nesting level
+    depth = 0;
+    for i in (idx + 1)..tokens.len() {
+        match &tokens[i] {
+            Token::Op(OpKind::OpenParen, _) => depth += 1,
+            Token::Op(OpKind::CloseParen, _) => {
+                if depth == 0 {
+                    break;
+                }
+                depth -= 1;
+            }
+            Token::Op(OpKind::SliceColon, _) if depth == 0 => return true,
+            Token::Op(OpKind::Comma, _) if depth == 0 => break,
+            _ => {}
+        }
+    }
+    false
+}
+
 fn is_unary_context(tokens: &[Token]) -> bool {
     // Walk backwards, skipping Space tokens
     for token in tokens.iter().rev() {
@@ -829,12 +868,18 @@ fn render(tokens: &[Token], ws: &WhitespaceConfig) -> String {
                             out.push_str(op_str);
                         }
                     }
-                    // Comma: no space before, configurable space after
+                    // Comma: no space before, configurable space after.
+                    // When slice_colon is compact, commas inside slice expressions
+                    // (adjacent to a SliceColon) also omit the trailing space.
                     OpKind::Comma => {
                         trim_trailing_space(&mut out);
                         out.push_str(op_str);
                         if spaced {
-                            out.push(' ');
+                            let in_slice = !ws.slice_colon.is_enabled()
+                                && is_slice_comma(tokens, idx);
+                            if !in_slice {
+                                out.push(' ');
+                            }
                         }
                     }
                     // Keyword arg = : always no spaces
