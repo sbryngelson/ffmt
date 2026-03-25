@@ -1,12 +1,11 @@
-SUBROUTINE s_test()
-INTEGER :: i
+subroutine s_test()
 
+    integer :: i
+    integer :: j
+    !$acc parallel loop
 
+    do i = 1, n
+        x(i) = 0
+    end do
 
-INTEGER :: j
-!$acc parallel loop
-
-DO i=1,n
-x(i)=0
-END DO
-END SUBROUTINE s_test
+end subroutine s_test

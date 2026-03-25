@@ -1,14 +1,17 @@
-SUBROUTINE s_test()
-INTEGER :: i,j,k
+subroutine s_test()
+
+    integer :: i, j, k
+
 #if defined(MFC_OpenACC)
-!$acc parallel loop collapse(3)
-DO k=0,p
-DO j=0,n
-DO i=0,m
-x(i,j,k)=y(i,j,k)*z(i,j,k)
-END DO
-END DO
-END DO
-!$acc end parallel loop
+    !$acc parallel loop collapse(3)
+    do k = 0, p
+        do j = 0, n
+            do i = 0, m
+                x(i, j, k) = y(i, j, k)*z(i, j, k)
+            end do
+        end do
+    end do
+    !$acc end parallel loop
 #endif
-END SUBROUTINE s_test
+
+end subroutine s_test
