@@ -875,8 +875,8 @@ fn render(tokens: &[Token], ws: &WhitespaceConfig) -> String {
                         trim_trailing_space(&mut out);
                         out.push_str(op_str);
                         if spaced {
-                            let in_slice = !ws.slice_colon.is_enabled()
-                                && is_slice_comma(tokens, idx);
+                            let in_slice =
+                                !ws.slice_colon.is_enabled() && is_slice_comma(tokens, idx);
                             if !in_slice {
                                 out.push(' ');
                             }
