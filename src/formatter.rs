@@ -1903,6 +1903,23 @@ fn rewrap_line(line: &str, max_length: usize, indent_width: usize) -> Vec<String
     let indent = leading_spaces(line);
     let content = line.trim_start();
 
+    // Split off trailing comment so we never produce a dangling "& ! comment" line.
+    // We wrap only the code portion; the comment is reattached to the last line.
+    let (code_content, trailing_comment) = split_trailing_comment(content);
+    let code_content = code_content.trim_end();
+
+    // If the code portion (with indent) fits, no wrapping needed
+    if indent + code_content.len() <= max_length {
+        return vec![line.to_string()];
+    }
+
+    // Use code-only content for wrapping; comment will be appended at the end
+    let content = if trailing_comment.is_empty() {
+        content
+    } else {
+        code_content
+    };
+
     // Find token boundaries in the content
     let breaks = find_token_breaks(content);
 
@@ -2036,8 +2053,44 @@ fn rewrap_line(line: &str, max_length: usize, indent_width: usize) -> Vec<String
     if result.is_empty() {
         vec![line.to_string()]
     } else {
+        // Reattach trailing comment to the last line
+        if !trailing_comment.is_empty() {
+            if let Some(last) = result.last_mut() {
+                last.push(' ');
+                last.push_str(trailing_comment);
+            }
+        }
         result
     }
+}
+
+/// Split content at the first `!` that starts a trailing comment (outside strings).
+/// Returns (code_part, comment_part). Comment part includes the `!`.
+fn split_trailing_comment(content: &str) -> (&str, &str) {
+    let bytes = content.as_bytes();
+    let mut in_string = false;
+    let mut quote_char = b' ';
+
+    for (i, &b) in bytes.iter().enumerate() {
+        if in_string {
+            if b == quote_char {
+                if i + 1 < bytes.len() && bytes[i + 1] == quote_char {
+                    continue; // doubled quote escape
+                }
+                in_string = false;
+            }
+            continue;
+        }
+        if b == b'\'' || b == b'"' {
+            in_string = true;
+            quote_char = b;
+            continue;
+        }
+        if b == b'!' {
+            return (&content[..i], &content[i..]);
+        }
+    }
+    (content, "")
 }
 
 #[derive(Clone, Copy)]
