@@ -1908,9 +1908,13 @@ fn rewrap_line(line: &str, max_length: usize, indent_width: usize) -> Vec<String
     let (code_content, trailing_comment) = split_trailing_comment(content);
     let code_content = code_content.trim_end();
 
-    // If the code portion (with indent) fits, no wrapping needed
-    if indent + code_content.len() <= max_length {
-        return vec![line.to_string()];
+    // If the code portion (with indent) fits but the comment makes it too long,
+    // move the comment to its own line(s) above the code.
+    if !trailing_comment.is_empty() && indent + code_content.len() <= max_length {
+        let comment_line = format!("{}{}", " ".repeat(indent), trailing_comment.trim());
+        let mut result = wrap_comment(&comment_line, max_length, 0, indent_width);
+        result.push(format!("{}{}", " ".repeat(indent), code_content));
+        return result;
     }
 
     // Use code-only content for wrapping; comment will be appended at the end

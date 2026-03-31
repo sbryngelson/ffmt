@@ -82,6 +82,23 @@ fn test_idempotent_fypp() {
 }
 
 #[test]
+fn test_trailing_comment_wrap() {
+    run_fixture("trailing_comment_wrap");
+}
+
+#[test]
+fn test_idempotent_trailing_comment_wrap() {
+    let fixture_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+    let input = fs::read_to_string(fixture_dir.join("trailing_comment_wrap.input.fpp")).unwrap();
+    let first = ffmt::format_string(&input);
+    let second = ffmt::format_string(&first);
+    assert_eq!(
+        first, second,
+        "Formatter is not idempotent on trailing_comment_wrap fixture"
+    );
+}
+
+#[test]
 fn test_error_recovery() {
     let input =
         "subroutine s_foo()\n    @@@ weird line @@@\n    integer :: x\nend subroutine s_foo\n";
