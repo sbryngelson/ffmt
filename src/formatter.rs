@@ -555,6 +555,7 @@ pub fn format_with_config(source: &str, config: &Config, range: Option<(usize, u
                 if line.len() > ll
                     && find_inline_doxygen_in_line(line).is_none()
                     && !line.trim_end().ends_with('&')
+                    && !line.trim_start().starts_with("& ")
                 {
                     final_lines.extend(rewrap_line(line, ll, iw));
                 } else {
@@ -1455,31 +1456,27 @@ fn join_short_comments(lines: &[String], max_length: usize) -> Vec<String> {
                 }
             }
 
-            // If only one line and it already fits, emit as-is
+            // If only one line, emit as-is
             if j == i + 1 {
                 result.push(line.clone());
                 i = j;
                 continue;
             }
 
-            // Rewrap the joined text at word boundaries
-            let words: Vec<&str> = full_text.split_whitespace().collect();
-            let mut current = String::new();
-            for word in &words {
-                if current.is_empty() {
-                    current = word.to_string();
-                } else if current.len() + 1 + word.len() <= avail {
-                    current.push(' ');
-                    current.push_str(word);
-                } else {
-                    result.push(format!("{}{}", prefix, current));
-                    current = word.to_string();
+            // Only join when the combined text fits on a single line.
+            // When each line is already at a reasonable length, they are
+            // independent comments and merging them would destroy the
+            // author's intent (and can cause a moved trailing comment to
+            // be merged into an unrelated preceding standalone comment).
+            if full_text.len() > avail {
+                for k in i..j {
+                    result.push(lines[k].clone());
                 }
-            }
-            if !current.is_empty() {
-                result.push(format!("{}{}", prefix, current));
+                i = j;
+                continue;
             }
 
+            result.push(format!("{}{}", prefix, full_text));
             i = j;
         } else {
             result.push(line.clone());
@@ -2233,6 +2230,11 @@ fn find_token_breaks(content: &str) -> Vec<(usize, BreakKind)> {
 
         i += 1;
     }
+
+    // Never break immediately before `%` (member accessor).  A break there
+    // would produce `& %member` on the next line, which is a blank within a
+    // lexical token — invalid in Fortran free-form (§6.3.2.2).
+    breaks.retain(|&(bp, _)| bp >= len || bytes[bp] != b'%');
 
     breaks
 }

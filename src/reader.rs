@@ -282,6 +282,16 @@ pub fn read_logical_lines(source: &str) -> Vec<LogicalLine> {
 
             raw_lines_acc.push(cont_line.to_string());
 
+            // Track whether this continuation line had a leading `&`.
+            // Per the Fortran free-form standard, when `&` is the last
+            // non-blank character on line N and line N+1 begins with `&`,
+            // the statement continues immediately after the leading `&`
+            // with NO implicit space inserted (the two tokens are glued).
+            // When line N+1 does NOT begin with `&`, one implicit space
+            // is inserted.  This matters for member access: `x &\n& %y`
+            // must join as `x%y`, not `x %y`.
+            let had_leading_amp = cont_line.trim_start().starts_with('&');
+
             // Strip leading `&` if present
             let stripped = strip_leading_amp(cont_line);
 
@@ -295,8 +305,17 @@ pub fn read_logical_lines(source: &str) -> Vec<LogicalLine> {
                 stripped.to_string()
             };
 
-            // Add space separator to prevent tokens from merging
-            joined_parts.push(format!(" {}", content.trim_start()));
+            let content_trimmed = content.trim_start();
+            // Suppress the space separator when the continuation starts with
+            // `%` (member accessor).  Adding a space there would produce
+            // `a %b` which is a blank within a lexical token — invalid in
+            // Fortran free-form (§6.3.2.2).
+            let sep = if had_leading_amp && content_trimmed.starts_with('%') {
+                ""
+            } else {
+                " "
+            };
+            joined_parts.push(format!("{}{}", sep, content_trimmed));
             i += 1;
 
             if !this_fort {
