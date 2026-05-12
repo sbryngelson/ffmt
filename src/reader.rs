@@ -86,8 +86,8 @@ fn strip_leading_amp(line: &str) -> &str {
 fn strip_amp_comment_continuation(line: &str) -> String {
     let trimmed = line.trim_start();
     // Match: leading `&` followed by optional spaces then `!` (but not `!$` for OpenACC/OMP)
-    if trimmed.starts_with('&') {
-        let after_amp = trimmed[1..].trim_start();
+    if let Some(stripped) = trimmed.strip_prefix('&') {
+        let after_amp = stripped.trim_start();
         if after_amp.starts_with('!') && !after_amp.starts_with("!$") {
             let indent = line.len() - line.trim_start().len();
             return format!("{}{}", " ".repeat(indent), after_amp);

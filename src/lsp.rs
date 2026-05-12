@@ -216,18 +216,16 @@ fn handle_message(
 
         _ => {
             // Unknown method — return method not found for requests (with id)
-            if let Some(id) = msg.get("id") {
-                Some(vec![json!({
+            msg.get("id").map(|id| {
+                vec![json!({
                     "jsonrpc": "2.0",
                     "id": id,
                     "error": {
                         "code": -32601,
                         "message": format!("method not found: {}", method)
                     }
-                })])
-            } else {
-                None // notification, ignore
-            }
+                })]
+            })
         }
     }
 }

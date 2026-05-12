@@ -1469,8 +1469,8 @@ fn join_short_comments(lines: &[String], max_length: usize) -> Vec<String> {
             // author's intent (and can cause a moved trailing comment to
             // be merged into an unrelated preceding standalone comment).
             if full_text.len() > avail {
-                for k in i..j {
-                    result.push(lines[k].clone());
+                for line in lines.iter().take(j).skip(i) {
+                    result.push(line.clone());
                 }
                 i = j;
                 continue;
