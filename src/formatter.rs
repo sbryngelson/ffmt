@@ -2184,6 +2184,18 @@ fn find_token_breaks(content: &str) -> Vec<(usize, BreakKind)> {
             breaks.push((end, BreakKind::Comma));
         }
 
+        // Dot-keyword logical operators: .and. .or. .eqv. .neqv.
+        // Break BEFORE the operator when preceded by a space, so a long
+        // `if (a .or. b .or. c)` wraps as `a .or. b &\n& .or. c`.
+        // .not. is unary — skip it.  .true./.false. are literals — skip them.
+        if !in_string && b == b'.' && i > 0 && bytes[i - 1] == b' ' {
+            let rest = &bytes[i..];
+            let lo = |op: &[u8]| rest.len() >= op.len() && rest[..op.len()].eq_ignore_ascii_case(op);
+            if lo(b".and.") || lo(b".or.") || lo(b".eqv.") || lo(b".neqv.") {
+                breaks.push((i, BreakKind::Operator));
+            }
+        }
+
         // Binary operators at any paren depth
         {
             // Multi-char operators: check for //, /=, ==, <=, >=, =>, **
