@@ -2118,7 +2118,8 @@ fn find_token_breaks(content: &str) -> Vec<(usize, BreakKind)> {
         let b = bytes[i];
 
         // Skip entire Fypp inline expressions — never break inside ${...}$ or @{...}@
-        if !in_string && !in_fypp && (b == b'$' || b == b'@') && i + 1 < len && bytes[i + 1] == b'{' {
+        if !in_string && !in_fypp && (b == b'$' || b == b'@') && i + 1 < len && bytes[i + 1] == b'{'
+        {
             in_fypp = true;
             i += 2;
             let mut depth = 1i32;
@@ -2190,7 +2191,8 @@ fn find_token_breaks(content: &str) -> Vec<(usize, BreakKind)> {
         // .not. is unary — skip it.  .true./.false. are literals — skip them.
         if !in_string && b == b'.' && i > 0 && bytes[i - 1] == b' ' {
             let rest = &bytes[i..];
-            let lo = |op: &[u8]| rest.len() >= op.len() && rest[..op.len()].eq_ignore_ascii_case(op);
+            let lo =
+                |op: &[u8]| rest.len() >= op.len() && rest[..op.len()].eq_ignore_ascii_case(op);
             if lo(b".and.") || lo(b".or.") || lo(b".eqv.") || lo(b".neqv.") {
                 breaks.push((i, BreakKind::Operator));
             }
