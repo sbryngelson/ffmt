@@ -106,8 +106,7 @@ fn test_member_access_wrap() {
 #[test]
 fn test_idempotent_member_access_wrap() {
     let fixture_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
-    let input =
-        fs::read_to_string(fixture_dir.join("member_access_wrap.input.fpp")).unwrap();
+    let input = fs::read_to_string(fixture_dir.join("member_access_wrap.input.fpp")).unwrap();
     let first = ffmt::format_string(&input);
     let second = ffmt::format_string(&first);
     assert_eq!(
