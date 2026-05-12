@@ -14,4 +14,10 @@ subroutine test_trailing_comment()
     ! Short trailing comment that fits - should stay inline
     call some_sub(a, b, c)  ! quick note
 
+    ! Mid-continuation comment: code must stay intact (comment is dropped)
+    call some_sub(arg1, arg2, arg3, arg4)
+
+    ! Mid-continuation comment with multiple following continuations
+    x = 1 + 2 + 3 + y + z
+
 end subroutine test_trailing_comment

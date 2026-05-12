@@ -2115,9 +2115,35 @@ fn find_token_breaks(content: &str) -> Vec<(usize, BreakKind)> {
     let mut in_string = false;
     let mut quote_char = b' ';
     let mut paren_depth = 0i32;
+    let mut in_fypp = false; // inside ${...}$ or @{...}@ block
 
     while i < len {
         let b = bytes[i];
+
+        // Skip entire Fypp inline expressions — never break inside ${...}$ or @{...}@
+        if !in_string && !in_fypp && (b == b'$' || b == b'@') && i + 1 < len && bytes[i + 1] == b'{' {
+            in_fypp = true;
+            i += 2;
+            let mut depth = 1i32;
+            while i < len && depth > 0 {
+                if bytes[i] == b'{' {
+                    depth += 1;
+                } else if bytes[i] == b'}' {
+                    depth -= 1;
+                    if depth == 0 {
+                        i += 1;
+                        // consume trailing $ or @
+                        if i < len && (bytes[i] == b'$' || bytes[i] == b'@') {
+                            i += 1;
+                        }
+                        in_fypp = false;
+                        break;
+                    }
+                }
+                i += 1;
+            }
+            continue;
+        }
 
         // Track strings — never break inside
         if in_string {

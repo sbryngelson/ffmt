@@ -86,14 +86,11 @@ fn strip_leading_amp(line: &str) -> &str {
 fn strip_amp_comment_continuation(line: &str) -> String {
     let trimmed = line.trim_start();
     // Match: leading `&` followed by optional spaces then `!` (but not `!$` for OpenACC/OMP)
-    if trimmed.starts_with("& !") && !trimmed.starts_with("& !$") {
-        // Check there's no code between & and ! — only whitespace
-        let after_amp = &trimmed[1..].trim_start();
+    if trimmed.starts_with('&') {
+        let after_amp = trimmed[1..].trim_start();
         if after_amp.starts_with('!') && !after_amp.starts_with("!$") {
-            // Convert to plain comment: preserve indentation, replace `& !` with `!`
             let indent = line.len() - line.trim_start().len();
-            let comment = &trimmed[1..].trim_start(); // "! comment text"
-            return format!("{}{}", " ".repeat(indent), comment);
+            return format!("{}{}", " ".repeat(indent), after_amp);
         }
     }
     line.to_string()
@@ -236,18 +233,51 @@ pub fn read_logical_lines(source: &str) -> Vec<LogicalLine> {
             }
 
             // If this line is a comment (possibly after `& !` was cleaned to `!`),
-            // stop continuation — Cray ftn rejects `& ! comment` lines (ftn-71).
-            // The comment will be emitted as a separate logical line.
-            // Also strip the trailing `&` from the last accumulated raw line,
-            // since the continuation has no actual code content.
+            // check whether more continuation code follows. Cray ftn (ftn-71)
+            // rejects `& ! comment` lines, so these are converted to plain
+            // comments. If they appear mid-continuation (more `& code` follows),
+            // we preserve them in the raw lines but skip them in the joined
+            // content so the logical statement stays intact. If the comment is
+            // the last line of the continuation, strip the trailing `&` from the
+            // preceding code line and stop.
             let cont_trimmed = cont_line.trim_start();
             if cont_trimmed.starts_with('!') && !cont_trimmed.starts_with("!$") {
-                if let Some(last_raw) = raw_lines_acc.last_mut() {
-                    if let Some(pos) = find_continuation_amp(last_raw) {
-                        *last_raw = last_raw[..pos].trim_end().to_string();
+                // Peek ahead past any additional blank/comment lines to see
+                // whether a continuation line (starting with `&`) follows.
+                let mut peek = i + 1;
+                while peek < raw_count {
+                    let p = cleaned[peek].as_str().trim_start();
+                    if p.is_empty() {
+                        peek += 1;
+                        continue;
                     }
+                    if p.starts_with('!') && !p.starts_with("!$") {
+                        peek += 1;
+                        continue;
+                    }
+                    break;
                 }
-                break;
+                let more_continuation =
+                    peek < raw_count && cleaned[peek].as_str().trim_start().starts_with('&');
+
+                if more_continuation {
+                    // Mid-continuation comment: keep in raw lines so the
+                    // original structure is preserved in the
+                    // continuation_interrupted path, but don't add any content
+                    // to joined_parts (comments carry no code).
+                    raw_lines_acc.push(cont_line.to_string());
+                    i += 1;
+                    continue;
+                } else {
+                    // Terminal comment: strip trailing `&` from the last code
+                    // line and stop — the comment becomes its own logical line.
+                    if let Some(last_raw) = raw_lines_acc.last_mut() {
+                        if let Some(pos) = find_continuation_amp(last_raw) {
+                            *last_raw = last_raw[..pos].trim_end().to_string();
+                        }
+                    }
+                    break;
+                }
             }
 
             raw_lines_acc.push(cont_line.to_string());
