@@ -555,6 +555,7 @@ pub fn format_with_config(source: &str, config: &Config, range: Option<(usize, u
                 if line.len() > ll
                     && find_inline_doxygen_in_line(line).is_none()
                     && !line.trim_end().ends_with('&')
+                    && !line.trim_start().starts_with("& ")
                 {
                     final_lines.extend(rewrap_line(line, ll, iw));
                 } else {
@@ -1455,31 +1456,27 @@ fn join_short_comments(lines: &[String], max_length: usize) -> Vec<String> {
                 }
             }
 
-            // If only one line and it already fits, emit as-is
+            // If only one line, emit as-is
             if j == i + 1 {
                 result.push(line.clone());
                 i = j;
                 continue;
             }
 
-            // Rewrap the joined text at word boundaries
-            let words: Vec<&str> = full_text.split_whitespace().collect();
-            let mut current = String::new();
-            for word in &words {
-                if current.is_empty() {
-                    current = word.to_string();
-                } else if current.len() + 1 + word.len() <= avail {
-                    current.push(' ');
-                    current.push_str(word);
-                } else {
-                    result.push(format!("{}{}", prefix, current));
-                    current = word.to_string();
+            // Only join when the combined text fits on a single line.
+            // When each line is already at a reasonable length, they are
+            // independent comments and merging them would destroy the
+            // author's intent (and can cause a moved trailing comment to
+            // be merged into an unrelated preceding standalone comment).
+            if full_text.len() > avail {
+                for line in lines.iter().take(j).skip(i) {
+                    result.push(line.clone());
                 }
-            }
-            if !current.is_empty() {
-                result.push(format!("{}{}", prefix, current));
+                i = j;
+                continue;
             }
 
+            result.push(format!("{}{}", prefix, full_text));
             i = j;
         } else {
             result.push(line.clone());
@@ -2115,9 +2112,36 @@ fn find_token_breaks(content: &str) -> Vec<(usize, BreakKind)> {
     let mut in_string = false;
     let mut quote_char = b' ';
     let mut paren_depth = 0i32;
+    let mut in_fypp = false; // inside ${...}$ or @{...}@ block
 
     while i < len {
         let b = bytes[i];
+
+        // Skip entire Fypp inline expressions — never break inside ${...}$ or @{...}@
+        if !in_string && !in_fypp && (b == b'$' || b == b'@') && i + 1 < len && bytes[i + 1] == b'{'
+        {
+            in_fypp = true;
+            i += 2;
+            let mut depth = 1i32;
+            while i < len && depth > 0 {
+                if bytes[i] == b'{' {
+                    depth += 1;
+                } else if bytes[i] == b'}' {
+                    depth -= 1;
+                    if depth == 0 {
+                        i += 1;
+                        // consume trailing $ or @
+                        if i < len && (bytes[i] == b'$' || bytes[i] == b'@') {
+                            i += 1;
+                        }
+                        in_fypp = false;
+                        break;
+                    }
+                }
+                i += 1;
+            }
+            continue;
+        }
 
         // Track strings — never break inside
         if in_string {
@@ -2159,6 +2183,19 @@ fn find_token_breaks(content: &str) -> Vec<(usize, BreakKind)> {
                 end += 1;
             }
             breaks.push((end, BreakKind::Comma));
+        }
+
+        // Dot-keyword logical operators: .and. .or. .eqv. .neqv.
+        // Break BEFORE the operator when preceded by a space, so a long
+        // `if (a .or. b .or. c)` wraps as `a .or. b &\n& .or. c`.
+        // .not. is unary — skip it.  .true./.false. are literals — skip them.
+        if !in_string && b == b'.' && i > 0 && bytes[i - 1] == b' ' {
+            let rest = &bytes[i..];
+            let lo =
+                |op: &[u8]| rest.len() >= op.len() && rest[..op.len()].eq_ignore_ascii_case(op);
+            if lo(b".and.") || lo(b".or.") || lo(b".eqv.") || lo(b".neqv.") {
+                breaks.push((i, BreakKind::Operator));
+            }
         }
 
         // Binary operators at any paren depth
@@ -2207,6 +2244,11 @@ fn find_token_breaks(content: &str) -> Vec<(usize, BreakKind)> {
 
         i += 1;
     }
+
+    // Never break immediately before `%` (member accessor).  A break there
+    // would produce `& %member` on the next line, which is a blank within a
+    // lexical token — invalid in Fortran free-form (§6.3.2.2).
+    breaks.retain(|&(bp, _)| bp >= len || bytes[bp] != b'%');
 
     breaks
 }
