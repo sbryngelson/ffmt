@@ -303,7 +303,11 @@ mod tests {
     fn full_doc_range_covers_trailing_newline() {
         let mut docs = HashMap::new();
         // Newline-terminated: {line: line_count, char: 0} is the canonical doc end.
-        open_doc(&mut docs, "file:///t.f90", "program t\nx=1\nend program t\n");
+        open_doc(
+            &mut docs,
+            "file:///t.f90",
+            "program t\nx=1\nend program t\n",
+        );
         let result = format_doc(&mut docs, "file:///t.f90");
         let end = &result[0]["range"]["end"];
         assert_eq!(end["line"], 3);

@@ -9,9 +9,11 @@ const BIN: &str = env!("CARGO_BIN_EXE_ffmt");
 
 /// Create a unique temp dir for a test.
 fn temp_dir(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir()
-        .join("ffmt-cli-tests")
-        .join(format!("{}-{}", name, std::process::id()));
+    let dir = std::env::temp_dir().join("ffmt-cli-tests").join(format!(
+        "{}-{}",
+        name,
+        std::process::id()
+    ));
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).unwrap();
     dir
@@ -59,10 +61,7 @@ fn test_stdin_diff_without_check_exits_zero() {
     let out = child.wait_with_output().unwrap();
     // --diff alone is informational: print the diff, exit 0.
     assert_eq!(out.status.code(), Some(0));
-    assert!(
-        !out.stdout.is_empty(),
-        "expected a diff on stdout"
-    );
+    assert!(!out.stdout.is_empty(), "expected a diff on stdout");
 }
 
 #[test]

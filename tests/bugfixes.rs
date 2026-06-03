@@ -161,18 +161,12 @@ fn test_classify_class_default_with_comment() {
 
 #[test]
 fn test_classify_if_then_with_paren_in_string() {
-    assert_eq!(
-        classify("if (ch == '(') then"),
-        LineKind::FortranBlockOpen
-    );
+    assert_eq!(classify("if (ch == '(') then"), LineKind::FortranBlockOpen);
 }
 
 #[test]
 fn test_classify_if_then_with_close_paren_in_string() {
-    assert_eq!(
-        classify("if (ch == ')') then"),
-        LineKind::FortranBlockOpen
-    );
+    assert_eq!(classify("if (ch == ')') then"), LineKind::FortranBlockOpen);
 }
 
 // --- end-of-line = "preserve" ---
