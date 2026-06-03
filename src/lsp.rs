@@ -68,6 +68,42 @@ fn write_message(writer: &mut impl Write, msg: &Value) {
     writer.flush().ok();
 }
 
+/// Compute the LSP range covering the entire document.
+///
+/// For a newline-terminated document, `{line: line_count, character: 0}` is
+/// the canonical end-of-document position. Without a trailing newline, the
+/// end must point at the end of the last line (in UTF-16 code units, per the
+/// LSP spec) — one line past the end is an invalid position some clients
+/// reject.
+fn full_document_range(text: &str) -> Value {
+    let line_count = text.lines().count();
+    let end = if text.is_empty() || text.ends_with('\n') {
+        json!({"line": line_count, "character": 0})
+    } else {
+        let last_line = text.lines().last().unwrap_or("");
+        json!({
+            "line": line_count.saturating_sub(1),
+            "character": last_line.encode_utf16().count(),
+        })
+    };
+    json!({
+        "start": {"line": 0, "character": 0},
+        "end": end,
+    })
+}
+
+/// Resolve the config for a document: search for `ffmt.toml` upward from the
+/// document's directory (same discovery as the CLI). Falls back to the given
+/// config for non-`file://` URIs.
+fn config_for_uri(uri: &str, fallback: &Config) -> Config {
+    if let Some(path) = uri.strip_prefix("file://") {
+        if let Some(dir) = std::path::Path::new(path).parent() {
+            return Config::find_and_load(dir);
+        }
+    }
+    fallback.clone()
+}
+
 fn handle_message(
     msg: &Value,
     documents: &mut HashMap<String, String>,
@@ -139,7 +175,8 @@ fn handle_message(
             let uri = msg["params"]["textDocument"]["uri"].as_str().unwrap_or("");
 
             if let Some(text) = documents.get(uri) {
-                let formatted = crate::formatter::format_with_config(text, config, None);
+                let config = config_for_uri(uri, config);
+                let formatted = crate::formatter::format_with_config(text, &config, None);
                 if formatted == *text {
                     return Some(vec![json!({
                         "jsonrpc": "2.0",
@@ -148,15 +185,11 @@ fn handle_message(
                     })]);
                 }
 
-                let line_count = text.lines().count();
                 Some(vec![json!({
                     "jsonrpc": "2.0",
                     "id": id,
                     "result": [{
-                        "range": {
-                            "start": {"line": 0, "character": 0},
-                            "end": {"line": line_count, "character": 0}
-                        },
+                        "range": full_document_range(text),
                         "newText": formatted
                     }]
                 })])
@@ -179,9 +212,10 @@ fn handle_message(
 
             if let Some(text) = documents.get(uri) {
                 // LSP lines are 0-based, ffmt range is 1-based
+                let config = config_for_uri(uri, config);
                 let formatted = crate::formatter::format_with_config(
                     text,
-                    config,
+                    &config,
                     Some((start_line + 1, end_line + 1)),
                 );
 
@@ -193,15 +227,11 @@ fn handle_message(
                     })]);
                 }
 
-                let line_count = text.lines().count();
                 Some(vec![json!({
                     "jsonrpc": "2.0",
                     "id": id,
                     "result": [{
-                        "range": {
-                            "start": {"line": 0, "character": 0},
-                            "end": {"line": line_count, "character": 0}
-                        },
+                        "range": full_document_range(text),
                         "newText": formatted
                     }]
                 })])
@@ -227,5 +257,78 @@ fn handle_message(
                 })]
             })
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn open_doc(documents: &mut HashMap<String, String>, uri: &str, text: &str) {
+        let msg = json!({
+            "jsonrpc": "2.0",
+            "method": "textDocument/didOpen",
+            "params": {"textDocument": {"uri": uri, "text": text}}
+        });
+        handle_message(&msg, documents, &Config::default());
+    }
+
+    fn format_doc(documents: &mut HashMap<String, String>, uri: &str) -> Value {
+        let msg = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "textDocument/formatting",
+            "params": {"textDocument": {"uri": uri}}
+        });
+        let resp = handle_message(&msg, documents, &Config::default()).unwrap();
+        resp[0]["result"].clone()
+    }
+
+    #[test]
+    fn full_doc_range_in_bounds_without_trailing_newline() {
+        let mut docs = HashMap::new();
+        // 3 lines, no trailing newline: last valid position is line 2, char 13.
+        open_doc(&mut docs, "file:///t.f90", "program t\nx=1\nend program t");
+        let result = format_doc(&mut docs, "file:///t.f90");
+        let end = &result[0]["range"]["end"];
+        assert_eq!(end["line"], 2, "end.line out of bounds: {end}");
+        assert_eq!(
+            end["character"],
+            "end program t".encode_utf16().count(),
+            "end.character must cover the last line: {end}"
+        );
+    }
+
+    #[test]
+    fn full_doc_range_covers_trailing_newline() {
+        let mut docs = HashMap::new();
+        // Newline-terminated: {line: line_count, char: 0} is the canonical doc end.
+        open_doc(&mut docs, "file:///t.f90", "program t\nx=1\nend program t\n");
+        let result = format_doc(&mut docs, "file:///t.f90");
+        let end = &result[0]["range"]["end"];
+        assert_eq!(end["line"], 3);
+        assert_eq!(end["character"], 0);
+    }
+
+    #[test]
+    fn formatting_uses_config_from_document_directory() {
+        let dir = std::env::temp_dir()
+            .join("ffmt-lsp-tests")
+            .join(format!("config-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("ffmt.toml"), "indent-width = 2\n").unwrap();
+        let file = dir.join("t.f90");
+        std::fs::write(&file, "").unwrap();
+        let uri = format!("file://{}", file.display());
+
+        let mut docs = HashMap::new();
+        open_doc(&mut docs, &uri, "program t\nx = 1\nend program t\n");
+        let result = format_doc(&mut docs, &uri);
+        let new_text = result[0]["newText"].as_str().unwrap();
+        assert!(
+            new_text.contains("\n  x = 1\n"),
+            "expected 2-space indent from ffmt.toml, got:\n{new_text}"
+        );
     }
 }

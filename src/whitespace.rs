@@ -73,27 +73,15 @@ pub fn normalize_whitespace(line: &str, ws_config: &WhitespaceConfig) -> String 
     render(&tokens, ws_config)
 }
 
-/// Add a space between control-flow keywords and `(` where missing.
-/// E.g., `if(x)` → `if (x)`, `call foo(` → `call foo(`  (call already has space)
-pub fn add_keyword_paren_spaces(line: &str) -> String {
-    use regex::Regex;
-    use std::sync::OnceLock;
-
-    static RE: OnceLock<Regex> = OnceLock::new();
-    let re = RE.get_or_init(|| {
-        Regex::new(r"(?i)\b(if|else\s*if|do\s+while|select\s+case|select\s+type|select\s+rank|where|forall|associate|call|write|read|open|close|inquire|allocate|deallocate|nullify)\(").unwrap()
-    });
-
-    // Walk through matches and insert space before (
-    // We need to be careful not to modify content inside strings
+/// Build a mask of byte positions inside string literals (handles doubled-quote
+/// escapes), and find the byte index where a trailing `!` comment starts
+/// (`line.len()` if there is no comment).
+fn string_mask_and_comment_start(line: &str) -> (Vec<bool>, usize) {
     let bytes = line.as_bytes();
-    let mut result = String::with_capacity(line.len() + 10);
-    let mut last_end = 0;
+    let mut string_mask = vec![false; bytes.len()];
     let mut in_string = false;
     let mut quote_char = b' ';
-
-    // Build a set of positions that are inside strings
-    let mut string_mask = vec![false; bytes.len()];
+    let mut comment_start = bytes.len();
     let mut i = 0;
     while i < bytes.len() {
         if in_string {
@@ -112,15 +100,37 @@ pub fn add_keyword_paren_spaces(line: &str) -> String {
                 in_string = true;
                 quote_char = bytes[i];
                 string_mask[i] = true;
+            } else if bytes[i] == b'!' {
+                comment_start = i;
+                break;
             }
             i += 1;
         }
     }
+    (string_mask, comment_start)
+}
+
+/// Add a space between control-flow keywords and `(` where missing.
+/// E.g., `if(x)` → `if (x)`, `call foo(` → `call foo(`  (call already has space)
+pub fn add_keyword_paren_spaces(line: &str) -> String {
+    use regex::Regex;
+    use std::sync::OnceLock;
+
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| {
+        Regex::new(r"(?i)\b(if|else\s*if|do\s+while|select\s+case|select\s+type|select\s+rank|where|forall|associate|call|write|read|open|close|inquire|allocate|deallocate|nullify)\(").unwrap()
+    });
+
+    // Walk through matches and insert space before (
+    // We need to be careful not to modify content inside strings or comments
+    let mut result = String::with_capacity(line.len() + 10);
+    let mut last_end = 0;
+    let (string_mask, comment_start) = string_mask_and_comment_start(line);
 
     for m in re.find_iter(line) {
         let paren_pos = m.end() - 1; // position of the (
-                                     // Skip if inside a string
-        if string_mask[paren_pos] {
+                                     // Skip if inside a string or comment
+        if string_mask[paren_pos] || paren_pos >= comment_start {
             continue;
         }
         // Skip if preceded by : (Fypp macro like @:ALLOCATE or $:DEALLOCATE)
@@ -152,20 +162,42 @@ fn out_position_before_spaces(line: &str, pos: usize) -> usize {
 /// notation. Matches patterns like `1.0e+3`, `1.e-5`, `2d+3`, `1.0E-16`.
 /// The char at `pos` should be `+` or `-`.
 fn is_exponent_sign(bytes: &[u8], pos: usize) -> bool {
-    if pos == 0 {
+    if pos < 2 {
         return false;
     }
     let prev = bytes[pos - 1];
     if prev != b'e' && prev != b'E' && prev != b'd' && prev != b'D' {
         return false;
     }
-    // Check that before the e/d there is a digit or a decimal point
-    // (covers 1.0e-3, 1.e-3, 2e+5, etc.)
-    if pos < 2 {
+    // Scan back over the mantissa: digits with at most one decimal point
+    // (covers 1.0e-3, 1.e-3, 2e+5, .5e-1, etc.)
+    let mut i = pos - 1; // at the e/d
+    let mut saw_digit = false;
+    let mut saw_dot = false;
+    while i > 0 {
+        let b = bytes[i - 1];
+        if b.is_ascii_digit() {
+            saw_digit = true;
+            i -= 1;
+        } else if b == b'.' && !saw_dot {
+            saw_dot = true;
+            i -= 1;
+        } else {
+            break;
+        }
+    }
+    if !saw_digit {
         return false;
     }
-    let before_ed = bytes[pos - 2];
-    before_ed.is_ascii_digit() || before_ed == b'.'
+    // The mantissa must be a standalone numeric literal, not the tail of an
+    // identifier like `x2e` (where `+`/`-` is a binary operator).
+    if i > 0 {
+        let b = bytes[i - 1];
+        if b.is_ascii_alphanumeric() || b == b'_' {
+            return false;
+        }
+    }
+    true
 }
 
 /// Normalize a regular `!` comment to ensure a space after `!`.
@@ -199,6 +231,7 @@ fn normalize_comment_bang(comment: &str) -> String {
 }
 
 /// Remove space between `intent` and `(` — convention is `intent(in)` not `intent (in)`.
+/// Leaves string literals and comments untouched.
 pub fn normalize_intent_paren(line: &str) -> String {
     use regex::Regex;
     use std::sync::OnceLock;
@@ -206,19 +239,23 @@ pub fn normalize_intent_paren(line: &str) -> String {
     static RE: OnceLock<Regex> = OnceLock::new();
     let re = RE.get_or_init(|| Regex::new(r"(?i)\bintent\s+\(").unwrap());
 
-    re.replace_all(line, |caps: &regex::Captures| {
-        let matched = caps.get(0).unwrap().as_str();
-        // Replace any whitespace between intent and ( with nothing
-        let lower = matched.to_ascii_lowercase();
-        if lower.starts_with("intent") {
-            // Preserve original case of "intent"
-            let intent_part = &matched[..6];
-            format!("{}(", intent_part)
-        } else {
-            matched.to_string()
+    let (string_mask, comment_start) = string_mask_and_comment_start(line);
+    let mut result = String::with_capacity(line.len());
+    let mut last_end = 0;
+
+    for m in re.find_iter(line) {
+        // Skip matches inside strings or comments
+        if string_mask[m.start()] || m.start() >= comment_start {
+            continue;
         }
-    })
-    .to_string()
+        result.push_str(&line[last_end..m.start()]);
+        // Preserve original case of "intent", drop the whitespace before (
+        result.push_str(&line[m.start()..m.start() + 6]);
+        result.push('(');
+        last_end = m.end();
+    }
+    result.push_str(&line[last_end..]);
+    result
 }
 
 /// Collapse runs of 2+ spaces to a single space outside of strings and comments.

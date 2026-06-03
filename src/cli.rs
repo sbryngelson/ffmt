@@ -6,7 +6,6 @@ use std::fs;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Default cache directory (relative to cwd).
 const CACHE_DIR: &str = ".ffmt_cache";
@@ -201,7 +200,6 @@ pub fn run() {
     };
 
     let range = parse_range(&args.range);
-    let any_changed = AtomicBool::new(false);
 
     let opts = ProcessOptions {
         check: args.check,
@@ -212,25 +210,37 @@ pub fn run() {
         verbose,
     };
 
-    files_to_process.par_iter().for_each(|path| {
-        let changed = process_file(path, &opts, &config);
-        if changed {
-            any_changed.store(true, Ordering::Relaxed);
-        }
-    });
+    let outcomes: Vec<(&PathBuf, Outcome)> = files_to_process
+        .par_iter()
+        .map(|path| (*path, process_file(path, &opts, &config)))
+        .collect();
+    let any_changed = outcomes.iter().any(|(_, o)| *o == Outcome::Changed);
+    let any_failed = outcomes.iter().any(|(_, o)| *o == Outcome::Failed);
+    let failed: std::collections::HashSet<&PathBuf> = outcomes
+        .iter()
+        .filter(|(_, o)| *o == Outcome::Failed)
+        .map(|(p, _)| *p)
+        .collect();
 
-    // Update cache for all files (including ones we skipped — they're still valid)
+    // Update cache for successfully processed files (including ones we skipped
+    // via the cache — they're still valid). Files that failed must NOT be
+    // cached, or the failure would be silently skipped on the next run.
     if let Some(ref mut cache) = cache {
         // Only update cache when formatting (not in check/diff mode)
         if !args.check && !args.diff {
             for f in &files {
-                cache.update(f);
+                if !failed.contains(f) {
+                    cache.update(f);
+                }
             }
             cache.save(cache_dir);
         }
     }
 
-    if args.check && any_changed.load(Ordering::Relaxed) {
+    if any_failed {
+        process::exit(2);
+    }
+    if args.check && any_changed {
         process::exit(1);
     }
 }
@@ -276,7 +286,10 @@ fn run_stdin(args: &Args, color: bool, quiet: bool, config: &crate::config::Conf
             if args.diff {
                 print_diff(Path::new(filepath), &source, &formatted, color);
             }
-            process::exit(1);
+            // --diff alone is informational; only --check signals failure
+            if args.check {
+                process::exit(1);
+            }
         }
     } else {
         io::stdout()
@@ -332,7 +345,7 @@ fn discover_files_with_config(
 
         for entry in builder.build().flatten() {
             let entry_path = entry.path();
-            if entry_path.is_file() && is_fortran_file(entry_path) {
+            if entry_path.is_file() && is_fortran_file_ext(entry_path, extensions) {
                 files.push(entry_path.to_path_buf());
             }
         }
@@ -341,10 +354,6 @@ fn discover_files_with_config(
     files.sort();
     files.dedup();
     files
-}
-
-fn is_fortran_file(path: &Path) -> bool {
-    is_fortran_file_ext(path, &crate::config::FilesConfig::default().extensions)
 }
 
 fn is_fortran_file_ext(path: &Path, extensions: &[String]) -> bool {
@@ -362,16 +371,24 @@ struct ProcessOptions {
     verbose: bool,
 }
 
-fn process_file(path: &Path, opts: &ProcessOptions, config: &crate::config::Config) -> bool {
+/// Result of processing one file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Outcome {
+    Unchanged,
+    Changed,
+    Failed,
+}
+
+fn process_file(path: &Path, opts: &ProcessOptions, config: &crate::config::Config) -> Outcome {
     let source = match fs::read_to_string(path) {
         Ok(s) => s,
         Err(e) if e.kind() == io::ErrorKind::InvalidData => {
             // Binary or invalid UTF-8: not a text Fortran file, skip silently
-            return false;
+            return Outcome::Unchanged;
         }
         Err(e) => {
             eprintln!("ffmt: cannot read {}: {e}", path.display());
-            return false;
+            return Outcome::Failed;
         }
     };
 
@@ -382,7 +399,7 @@ fn process_file(path: &Path, opts: &ProcessOptions, config: &crate::config::Conf
     let formatted = crate::formatter::format_with_config(&source, config, opts.range);
 
     if formatted == source {
-        return false;
+        return Outcome::Unchanged;
     }
 
     if opts.check || opts.diff {
@@ -392,14 +409,15 @@ fn process_file(path: &Path, opts: &ProcessOptions, config: &crate::config::Conf
         if opts.diff {
             print_diff(path, &source, &formatted, opts.color);
         }
-        return true;
+        return Outcome::Changed;
     }
 
     if let Err(e) = fs::write(path, &formatted) {
         eprintln!("ffmt: cannot write {}: {e}", path.display());
+        return Outcome::Failed;
     }
 
-    true
+    Outcome::Changed
 }
 
 fn print_diff(path: &Path, original: &str, formatted: &str, color: bool) {

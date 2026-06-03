@@ -100,11 +100,31 @@ fn strip_trailing_comment(s: &str) -> String {
 
 /// Find the matching closing paren for the paren at position `start`.
 /// Returns the index of the closing paren, or None if not found.
+/// Parens inside string literals are ignored (e.g., `if (ch == '(') then`).
 fn find_matching_paren(s: &str, start: usize) -> Option<usize> {
     let bytes = s.as_bytes();
     let mut depth = 0i32;
-    for (i, &byte) in bytes.iter().enumerate().skip(start) {
+    let mut in_string = false;
+    let mut quote = b' ';
+    let mut i = start;
+    while i < bytes.len() {
+        let byte = bytes[i];
+        if in_string {
+            if byte == quote {
+                if i + 1 < bytes.len() && bytes[i + 1] == quote {
+                    i += 2; // escaped quote — stay in string
+                    continue;
+                }
+                in_string = false;
+            }
+            i += 1;
+            continue;
+        }
         match byte {
+            b'\'' | b'"' => {
+                in_string = true;
+                quote = byte;
+            }
             b'(' => depth += 1,
             b')' => {
                 depth -= 1;
@@ -114,6 +134,7 @@ fn find_matching_paren(s: &str, start: usize) -> Option<usize> {
             }
             _ => {}
         }
+        i += 1;
     }
     None
 }
@@ -177,6 +198,12 @@ fn classify_fortran(trimmed: &str) -> LineKind {
             trimmed
         }
     };
+
+    // Strip any trailing comment so checks like `lower == "contains"` and the
+    // "what follows the closing paren" tests are not confused by comment text
+    // (e.g., `contains ! public api`, `where (mask > 0) ! note`).
+    let stripped = strip_trailing_comment(line);
+    let line = stripped.as_str();
 
     let lower = line.to_ascii_lowercase();
 

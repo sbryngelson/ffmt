@@ -73,6 +73,9 @@ pub fn format_with_range(source: &str, range: Option<(usize, usize)>) -> String 
 
 /// Format with full config and optional range.
 pub fn format_with_config(source: &str, config: &Config, range: Option<(usize, usize)>) -> String {
+    // Remember the original line-ending style for EndOfLine::Preserve
+    // (the source is normalized to \n for parsing below).
+    let source_had_crlf = source.contains("\r\n");
     // Normalize line endings before parsing (ensures reader sees consistent \n)
     let normalized_source;
     let src = if source.contains('\r') {
@@ -634,7 +637,14 @@ pub fn format_with_config(source: &str, config: &Config, range: Option<(usize, u
             result = result.replace("\r\n", "\n").replace('\r', "\n");
             result = result.replace('\n', "\r\n");
         }
-        EndOfLine::Preserve => {}
+        EndOfLine::Preserve => {
+            // The source was normalized to LF for parsing; restore the
+            // original ending style.
+            if source_had_crlf {
+                result = result.replace("\r\n", "\n").replace('\r', "\n");
+                result = result.replace('\n', "\r\n");
+            }
+        }
     }
 
     result
@@ -1505,19 +1515,23 @@ fn is_declaration_line(line: &str) -> bool {
     let bytes = trimmed.as_bytes();
     let mut in_string = false;
     let mut quote_char = b' ';
-    for i in 0..bytes.len() {
+    let mut i = 0;
+    while i < bytes.len() {
         if in_string {
             if bytes[i] == quote_char {
                 if i + 1 < bytes.len() && bytes[i + 1] == quote_char {
+                    i += 2; // escaped quote — stay in string
                     continue;
                 }
                 in_string = false;
             }
+            i += 1;
             continue;
         }
         if bytes[i] == b'\'' || bytes[i] == b'"' {
             in_string = true;
             quote_char = bytes[i];
+            i += 1;
             continue;
         }
         if bytes[i] == b'!' {
@@ -1526,6 +1540,7 @@ fn is_declaration_line(line: &str) -> bool {
         if bytes[i] == b':' && i + 1 < bytes.len() && bytes[i + 1] == b':' {
             return true;
         }
+        i += 1;
     }
     false
 }
@@ -1552,12 +1567,14 @@ fn ensure_two_spaces_before_inline_comment(lines: &[String]) -> Vec<String> {
             let bytes = line.as_bytes();
             let mut in_string = false;
             let mut delim = b' ';
-            for i in 0..bytes.len() {
+            let mut i = 0;
+            while i < bytes.len() {
                 if in_string {
                     if bytes[i] == delim {
                         // Check for doubled quote escape
                         if i + 1 < bytes.len() && bytes[i + 1] == delim {
-                            continue; // skip
+                            i += 2; // escaped quote — stay in string
+                            continue;
                         }
                         in_string = false;
                     }
@@ -1592,6 +1609,7 @@ fn ensure_two_spaces_before_inline_comment(lines: &[String]) -> Vec<String> {
                     let comment_part = &line[i..];
                     return format!("{}  {}", code_part, comment_part);
                 }
+                i += 1;
             }
             line.clone()
         })
@@ -1620,10 +1638,12 @@ fn strip_trailing_semicolons(lines: &[String]) -> Vec<String> {
             let mut in_string = false;
             let mut delim = b' ';
             let mut comment_start = bytes.len();
-            for i in 0..bytes.len() {
+            let mut i = 0;
+            while i < bytes.len() {
                 if in_string {
                     if bytes[i] == delim {
                         if i + 1 < bytes.len() && bytes[i + 1] == delim {
+                            i += 2; // escaped quote — stay in string
                             continue;
                         }
                         in_string = false;
@@ -1635,6 +1655,7 @@ fn strip_trailing_semicolons(lines: &[String]) -> Vec<String> {
                     comment_start = i;
                     break;
                 }
+                i += 1;
             }
             let code = &line[..comment_start];
             let comment = &line[comment_start..];
@@ -2271,36 +2292,37 @@ fn normalize_fypp_lists(line: &str) -> String {
     let bytes = line.as_bytes();
     let len = bytes.len();
     let mut i = 0;
+    // Start of the pending region to copy verbatim (always on a char boundary,
+    // since we only advance past ASCII delimiters).
+    let mut plain_start = 0;
 
     while i < len {
         // Look for '[
         if i + 1 < len && bytes[i] == b'\'' && bytes[i + 1] == b'[' {
             // Find the matching ]'
-            let start = i;
-            i += 2; // skip '[
-            let mut content = String::new();
-            while i < len {
-                if bytes[i] == b']' && i + 1 < len && bytes[i + 1] == b'\'' {
-                    // Found ]' -- normalize commas in content
-                    let normalized_content = normalize_comma_spacing(&content);
-                    result.push_str("'[");
-                    result.push_str(&normalized_content);
-                    result.push_str("]'");
-                    i += 2; // skip ]'
+            let mut j = i + 2;
+            let mut close = None;
+            while j + 1 < len {
+                if bytes[j] == b']' && bytes[j + 1] == b'\'' {
+                    close = Some(j);
                     break;
                 }
-                content.push(bytes[i] as char);
-                i += 1;
+                j += 1;
             }
-            // If we didn't find ]', emit original
-            if i >= len && !result.ends_with("]'") {
-                result.push_str(&line[start..]);
+            if let Some(close) = close {
+                // Found ]' -- normalize commas in content
+                result.push_str(&line[plain_start..i]);
+                result.push_str("'[");
+                result.push_str(&normalize_comma_spacing(&line[i + 2..close]));
+                result.push_str("]'");
+                i = close + 2;
+                plain_start = i;
+                continue;
             }
-        } else {
-            result.push(bytes[i] as char);
-            i += 1;
         }
+        i += 1;
     }
+    result.push_str(&line[plain_start..]);
 
     result
 }
@@ -2339,19 +2361,19 @@ fn modernize_relational_operators(lines: &[String]) -> Vec<String> {
             let mut i = 0;
             let mut in_string = false;
             let mut quote_char = b' ';
+            // Start of the pending region to copy verbatim (always on a char
+            // boundary, since we only cut at ASCII operator positions).
+            let mut plain_start = 0;
 
             while i < len {
                 if in_string {
                     if bytes[i] == quote_char {
                         if i + 1 < len && bytes[i + 1] == quote_char {
-                            result.push(bytes[i] as char);
-                            result.push(bytes[i + 1] as char);
-                            i += 2;
+                            i += 2; // escaped quote — stay in string
                             continue;
                         }
                         in_string = false;
                     }
-                    result.push(bytes[i] as char);
                     i += 1;
                     continue;
                 }
@@ -2359,43 +2381,39 @@ fn modernize_relational_operators(lines: &[String]) -> Vec<String> {
                 if bytes[i] == b'\'' || bytes[i] == b'"' {
                     in_string = true;
                     quote_char = bytes[i];
-                    result.push(bytes[i] as char);
                     i += 1;
                     continue;
                 }
 
-                // Comment start — copy rest verbatim
+                // Comment start — rest is copied verbatim below
                 if bytes[i] == b'!' {
-                    result.push_str(&line[i..]);
-                    return result;
+                    break;
                 }
 
                 // Check for legacy operator
                 if bytes[i] == b'.' {
-                    let mut matched = false;
+                    let mut matched = None;
                     for &(legacy, modern) in operators {
                         let legacy_len = legacy.len();
-                        if i + legacy_len <= len {
-                            let candidate: String = bytes[i..i + legacy_len]
-                                .iter()
-                                .map(|&b| (b as char).to_ascii_lowercase())
-                                .collect();
-                            if candidate == legacy {
-                                result.push_str(modern);
-                                i += legacy_len;
-                                matched = true;
-                                break;
-                            }
+                        if i + legacy_len <= len
+                            && bytes[i..i + legacy_len].eq_ignore_ascii_case(legacy.as_bytes())
+                        {
+                            matched = Some((legacy_len, modern));
+                            break;
                         }
                     }
-                    if matched {
+                    if let Some((legacy_len, modern)) = matched {
+                        result.push_str(&line[plain_start..i]);
+                        result.push_str(modern);
+                        i += legacy_len;
+                        plain_start = i;
                         continue;
                     }
                 }
 
-                result.push(bytes[i] as char);
                 i += 1;
             }
+            result.push_str(&line[plain_start..]);
 
             result
         })
@@ -2535,19 +2553,23 @@ fn split_multi_statements(lines: &[String]) -> Vec<String> {
         let mut quote_char = b' ';
         let mut semicolons: Vec<usize> = Vec::new();
 
-        for i in 0..len {
+        let mut i = 0;
+        while i < len {
             if in_string {
                 if bytes[i] == quote_char {
                     if i + 1 < len && bytes[i + 1] == quote_char {
+                        i += 2; // escaped quote — stay in string
                         continue;
                     }
                     in_string = false;
                 }
+                i += 1;
                 continue;
             }
             if bytes[i] == b'\'' || bytes[i] == b'"' {
                 in_string = true;
                 quote_char = bytes[i];
+                i += 1;
                 continue;
             }
             if bytes[i] == b'!' {
@@ -2556,6 +2578,7 @@ fn split_multi_statements(lines: &[String]) -> Vec<String> {
             if bytes[i] == b';' {
                 semicolons.push(i);
             }
+            i += 1;
         }
 
         if semicolons.is_empty() {
@@ -2868,21 +2891,25 @@ fn normalize_comma_spacing(s: &str) -> String {
     let bytes = s.as_bytes();
     let len = bytes.len();
     let mut i = 0;
+    // Start of the pending region to copy verbatim (always on a char boundary,
+    // since we only cut at ASCII commas/spaces).
+    let mut plain_start = 0;
 
     while i < len {
         if bytes[i] == b',' {
-            result.push(',');
-            result.push(' ');
+            result.push_str(&s[plain_start..i]);
+            result.push_str(", ");
             // Skip any whitespace after the comma
             i += 1;
             while i < len && bytes[i] == b' ' {
                 i += 1;
             }
+            plain_start = i;
         } else {
-            result.push(bytes[i] as char);
             i += 1;
         }
     }
+    result.push_str(&s[plain_start..]);
 
     result
 }
