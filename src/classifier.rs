@@ -141,6 +141,18 @@ fn find_matching_paren(s: &str, start: usize) -> Option<usize> {
 
 /// Classify a Fortran line.
 fn classify_fortran(trimmed: &str) -> LineKind {
+    // Strip an optional numeric statement label (e.g. "10 continue", "100 end if")
+    // so the underlying statement is classified. The label is kept in the output;
+    // stripping happens for classification only.
+    let (trimmed, had_numeric_label) = {
+        let re_num_label = re!(NUM_LABEL, r"^\d+\s+");
+        if let Some(m) = re_num_label.find(trimmed) {
+            (trimmed[m.end()..].trim_start(), true)
+        } else {
+            (trimmed, false)
+        }
+    };
+
     // Strip optional label prefix like "outer: "
     let line = {
         let re_label = re!(LABEL, r"(?i)^\w+\s*:\s*");
@@ -212,8 +224,20 @@ fn classify_fortran(trimmed: &str) -> LineKind {
         END_BLOCK,
         r"(?i)^end\s*(if|do|select|subroutine|function|module|submodule|program|interface|type|block|associate|where|forall|enum|critical|team)\b"
     );
-    if re_end_block.is_match(line) {
-        return LineKind::FortranBlockClose;
+    if let Some(m) = re_end_block.find(line) {
+        // Fortran has no reserved words: "endif = 5" is an assignment to a
+        // variable named "endif", not a block close.
+        let rest = line[m.end()..].trim_start();
+        if !rest.starts_with('=') {
+            // A numeric-labeled "end do" may terminate a non-block labeled DO
+            // ("do 10 ... 10 end do"); since "do <label>" does not push an
+            // indentation scope, don't pop one here.
+            let re_end_do = re!(END_DO_LABELED, r"(?i)^end\s*do\b");
+            if had_numeric_label && re_end_do.is_match(line) {
+                return LineKind::FortranStatement;
+            }
+            return LineKind::FortranBlockClose;
+        }
     }
     // Bare "end" (possibly followed by comment)
     let re_bare_end = re!(BARE_END, r"(?i)^end\s*(!.*)?$");
@@ -227,8 +251,8 @@ fn classify_fortran(trimmed: &str) -> LineKind {
     if re_else_if.is_match(line) {
         return LineKind::FortranContinuation;
     }
-    // bare else (possibly followed by comment)
-    let re_bare_else = re!(BARE_ELSE, r"(?i)^else\s*(!.*)?$");
+    // bare else or named "else <construct-name>" (possibly followed by comment)
+    let re_bare_else = re!(BARE_ELSE, r"(?i)^else\b(\s+\w+)?\s*(!.*)?$");
     if re_bare_else.is_match(line) {
         return LineKind::FortranContinuation;
     }
@@ -291,6 +315,14 @@ fn classify_fortran(trimmed: &str) -> LineKind {
         }
     }
 
+    // Non-block labeled DO ("do 10 i = 1, n") is terminated by the labeled
+    // statement ("10 continue"), which is classified as a plain statement, so
+    // it must NOT open an indentation scope.
+    let re_do_label = re!(DO_LABEL, r"(?i)^do\s+\d+\b");
+    if re_do_label.is_match(line) {
+        return LineKind::FortranStatement;
+    }
+
     // do / do concurrent
     let re_do = re!(DO_OPEN, r"(?i)^do\b");
     if re_do.is_match(line) {
@@ -314,10 +346,11 @@ fn classify_fortran(trimmed: &str) -> LineKind {
         return LineKind::FortranBlockOpen;
     }
 
-    // function (with optional prefixes)
+    // function (with optional prefixes; type-spec prefixes may carry a paren
+    // group with one level of nesting, e.g. type(point(8)), integer(kind=8))
     let re_func = re!(
         FUNC,
-        r"(?i)^(((pure|elemental|impure|recursive|integer|real|double\s+precision|complex|character|logical|type\s*\([^)]*\))\s+)*)function\b"
+        r"(?i)^((((pure|elemental|impure|recursive|module)|(integer|real|double\s+precision|complex|character|logical|type|class)(\s*\(([^()]|\([^()]*\))*\))?)\s+)*)function\b"
     );
     if re_func.is_match(line) {
         return LineKind::FortranBlockOpen;
@@ -361,8 +394,8 @@ fn classify_fortran(trimmed: &str) -> LineKind {
             return LineKind::FortranStatement;
         }
         // type is (...) was already handled in continuations above
-        // type :: name  or  type, attrs :: name  -> definition (block open)
-        let re_type_def = re!(TYPE_DEF, r"(?i)^type\b[\s,]");
+        // type :: name, type::name, or type, attrs :: name -> definition (block open)
+        let re_type_def = re!(TYPE_DEF, r"(?i)^type\s*(::|,|\s)");
         if re_type_def.is_match(line) {
             return LineKind::FortranBlockOpen;
         }
@@ -404,6 +437,12 @@ fn classify_fortran(trimmed: &str) -> LineKind {
                 }
             }
         }
+    }
+
+    // block data [name] (legacy program unit; "end block data" is a closer)
+    let re_block_data = re!(BLOCK_DATA, r"(?i)^block\s*data(\s+\w+)?\s*$");
+    if re_block_data.is_match(line) {
+        return LineKind::FortranBlockOpen;
     }
 
     // block (bare keyword)
@@ -493,7 +532,10 @@ pub fn classify(line: &str) -> LineKind {
 /// - `type :: my_type` -> Some("my_type")
 /// - `type, extends(base) :: child` -> Some("child")
 pub fn extract_scope_name(line: &str) -> Option<String> {
-    let trimmed = line.trim();
+    // Strip any trailing comment (string-aware) so names are never read from
+    // comment text (e.g. `program main ! function test`).
+    let stripped = strip_trailing_comment(line.trim());
+    let trimmed = stripped.as_str();
     let lower = trimmed.to_ascii_lowercase();
 
     // subroutine name(...) or subroutine name
@@ -508,7 +550,7 @@ pub fn extract_scope_name(line: &str) -> Option<String> {
     // function name(...) or function name
     let re_func = re!(
         SCOPE_FUNC,
-        r"(?i)(?:(?:pure|elemental|impure|recursive|integer|real|double\s+precision|complex|character|logical|type\s*\([^)]*\))\s+)*function\s+(\w+)"
+        r"(?i)(?:(?:pure|elemental|impure|recursive|module|(?:integer|real|double\s+precision|complex|character|logical|type|class)(?:\s*\((?:[^()]|\([^()]*\))*\))?)\s+)*function\s+(\w+)"
     );
     if let Some(caps) = re_func.captures(trimmed) {
         return Some(caps[1].to_string());
