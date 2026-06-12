@@ -68,6 +68,12 @@ fn split_at_comment(line: &str) -> (&str, &str) {
 /// Apply keyword normalization to the code portion of a line.
 /// Protects string literals from modification.
 fn normalize_code_keywords(code: &str) -> String {
+    // end* compounds — applied with a suffix check: `endif = 3` is an
+    // assignment to a variable named endif, not a block close.
+    static END_RE: OnceLock<Regex> = OnceLock::new();
+    let end_re = END_RE.get_or_init(|| {
+        Regex::new(r"(?i)\b(end)(do|if|select|subroutine|function|module|submodule|program|interface|type|block|associate|where|forall|enum|critical|team)\b").unwrap()
+    });
     static RE: OnceLock<Vec<(Regex, &str)>> = OnceLock::new();
     let patterns = RE.get_or_init(|| {
         vec![
@@ -129,12 +135,6 @@ fn normalize_code_keywords(code: &str) -> String {
                 i += 1;
             }
             let mut segment = code[start..i].to_string();
-            // end* compounds — applied with a suffix check: `endif = 3` is
-            // an assignment to a variable named endif, not a block close.
-            static END_RE: OnceLock<Regex> = OnceLock::new();
-            let end_re = END_RE.get_or_init(|| {
-                Regex::new(r"(?i)\b(end)(do|if|select|subroutine|function|module|submodule|program|interface|type|block|associate|where|forall|enum|critical|team)\b").unwrap()
-            });
             segment = {
                 let src = segment.as_str();
                 end_re
