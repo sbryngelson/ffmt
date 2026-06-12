@@ -12,378 +12,528 @@ pub struct LogicalLine {
     /// sentinels are excluded: hoisting one to its own line would turn an
     /// inert trailer into an active directive.
     pub hoisted_comments: Vec<String>,
+    /// Emit `raw_lines` verbatim instead of rebuilding from `joined`. Set when
+    /// the continuation contains something that cannot be moved or rebuilt
+    /// safely: a `!$` directive sentinel (full-line or as a trailer after the
+    /// `&`), or a malformed character-literal continuation.
+    pub preserve: bool,
 }
 
-/// Scan a line and return the index of a trailing `&` continuation character.
-/// Returns `None` if the line does not end with a continuation `&`.
-///
-/// In Fortran free-form source, `&` as the last non-whitespace character
-/// before any comment is ALWAYS a continuation marker, even inside strings
-/// that span multiple lines. String state is only tracked to correctly
-/// identify where comments start (`!` inside a string is not a comment).
-fn find_continuation_amp(line: &str) -> Option<usize> {
-    let chars: Vec<char> = line.chars().collect();
-    let n = chars.len();
+impl LogicalLine {
+    fn single(line: &str, line_number: usize) -> Self {
+        LogicalLine {
+            joined: line.to_string(),
+            raw_lines: vec![line.to_string()],
+            line_number,
+            hoisted_comments: Vec::new(),
+            preserve: false,
+        }
+    }
+}
 
-    // Step 1: Find where the comment starts (! outside strings)
-    let mut in_string = false;
-    let mut string_delim = ' ';
-    let mut comment_start = n; // index into chars
-    let mut i = 0;
-    while i < n {
-        let ch = chars[i];
-        if in_string {
-            if ch == string_delim {
-                if i + 1 < n && chars[i + 1] == string_delim {
-                    i += 2; // skip doubled quote escape
+/// Result of scanning one physical line with the string state carried in
+/// from a preceding character-literal continuation.
+struct LineScan {
+    /// Byte position of a trailing continuation `&` (the last non-blank
+    /// character before commentary outside strings, or the last non-blank
+    /// character of the line while inside a character literal), or None.
+    amp: Option<usize>,
+    /// Byte position where commentary (`!` outside any string) starts.
+    comment_start: Option<usize>,
+    /// String state after this line: Some(delim) only when the line ends
+    /// with a continuation `&` while inside a character literal.
+    end_state: Option<char>,
+    /// Whether the trailing `&` sits inside a character literal.
+    amp_in_string: bool,
+}
+
+/// Scan the body of a line, beginning in string state `start`, looking for
+/// the comment start and the trailing continuation `&`.
+fn scan_line(line: &str, start: Option<char>) -> LineScan {
+    let bytes_len = line.len();
+    let mut in_string = start;
+    let mut comment_start: Option<usize> = None;
+
+    let chars: Vec<(usize, char)> = line.char_indices().collect();
+    let mut k = 0;
+    while k < chars.len() {
+        let (bi, ch) = chars[k];
+        if let Some(d) = in_string {
+            if ch == d {
+                if k + 1 < chars.len() && chars[k + 1].1 == d {
+                    k += 2; // doubled-quote escape
                     continue;
                 }
-                in_string = false;
-            }
-            i += 1;
-            continue;
-        }
-        if ch == '\'' || ch == '"' {
-            in_string = true;
-            string_delim = ch;
-            i += 1;
-            continue;
-        }
-        if ch == '!' {
-            comment_start = i;
-            break;
-        }
-        i += 1;
-    }
-
-    // Step 2: Find the last non-whitespace char before the comment.
-    // If it's `&`, that's the continuation marker.
-    let mut last_amp_byte: Option<usize> = None;
-    let mut byte_pos = 0usize;
-    for ch in chars.iter().take(comment_start) {
-        let ch = *ch;
-        if ch == '&' {
-            last_amp_byte = Some(byte_pos);
-        } else if !ch.is_whitespace() {
-            last_amp_byte = None;
-        }
-        byte_pos += ch.len_utf8();
-    }
-
-    last_amp_byte
-}
-
-/// Strip the leading `&` from a continuation line if present (after optional
-/// leading whitespace).
-fn strip_leading_amp(line: &str) -> &str {
-    let trimmed_start = line.trim_start();
-    if trimmed_start.starts_with('&') {
-        // Return everything after the `&` — keep remaining whitespace
-        let amp_byte = line.len() - trimmed_start.len();
-        &line[amp_byte + 1..]
-    } else {
-        line
-    }
-}
-
-/// Read source text into logical lines.
-/// Strip leading `& !` from continuation-comment lines.
-/// Lines like `& ! some comment text` are continuation lines that contain
-/// only a comment after the `&`. Cray ftn (ftn-71) rejects these as invalid.
-/// Convert them to plain comment lines by removing the leading `&`.
-fn strip_amp_comment_continuation(line: &str) -> String {
-    let trimmed = line.trim_start();
-    // Match: leading `&` followed by optional spaces then `!` (but not `!$` for OpenACC/OMP)
-    if let Some(stripped) = trimmed.strip_prefix('&') {
-        let after_amp = stripped.trim_start();
-        if after_amp.starts_with('!') && !after_amp.starts_with("!$") {
-            let indent = line.len() - line.trim_start().len();
-            return format!("{}{}", " ".repeat(indent), after_amp);
-        }
-    }
-    line.to_string()
-}
-
-/// Strip trailing `!&` (with optional surrounding whitespace) from a line.
-/// `!&` is a no-op comment used in some codebases to suppress compiler warnings
-/// about line continuations. It carries no semantic meaning and can confuse
-/// compilers like Cray ftn that strictly enforce continuation rules.
-fn strip_trailing_bang_amp(line: &str) -> String {
-    let mut trimmed = line.trim_end();
-    // Strip all trailing `!&` (may be repeated, e.g., `!&!&`)
-    while trimmed.ends_with("!&") {
-        trimmed = trimmed[..trimmed.len() - 2].trim_end();
-    }
-    if trimmed.len() == line.trim_end().len() {
-        return line.to_string();
-    }
-    // Verify that stripping is safe (not inside a string)
-    let before = trimmed;
-    // Quick check: if `!&` is preceded by something that looks like code or
-    // whitespace (not inside a string), strip it.
-    let mut in_string = false;
-    let mut delim = ' ';
-    for ch in before.chars() {
-        if in_string {
-            if ch == delim {
-                in_string = false;
+                in_string = None;
             }
         } else if ch == '\'' || ch == '"' {
-            in_string = true;
-            delim = ch;
+            in_string = Some(ch);
+        } else if ch == '!' {
+            comment_start = Some(bi);
+            break;
         }
+        k += 1;
     }
-    // If we're inside a string at the `!` position, don't strip
-    if in_string {
+
+    // The candidate continuation `&` is the last non-blank character of the
+    // code region (everything before commentary; the whole line when the
+    // line ends inside a string, since `!` in a string is not commentary).
+    let scan_end = comment_start.unwrap_or(bytes_len);
+    let code = line[..scan_end].trim_end();
+    let amp = if code.ends_with('&') {
+        Some(code.len() - 1)
+    } else {
+        None
+    };
+
+    // String state at the trailing `&` equals the state at end of scan
+    // (the `&` is the last non-blank, so no quote can follow it).
+    let amp_in_string = amp.is_some() && in_string.is_some();
+
+    let end_state = if amp.is_some() { in_string } else { None };
+
+    LineScan {
+        amp,
+        comment_start,
+        end_state,
+        amp_in_string,
+    }
+}
+
+/// Public helper kept for compatibility: trailing continuation `&` position
+/// for a line that does not start inside a string.
+fn find_continuation_amp(line: &str) -> Option<usize> {
+    scan_line(line, None).amp
+}
+
+/// Strip trailing `!&` from a line, but ONLY when the `!&` run is the entire
+/// comment (`code !&`, `code !&!&`). `!&` is a no-op marker used to suppress
+/// continuation warnings; it carries no meaning. A `!&` at the end of
+/// ordinary comment text (`! see foo!&`) is text and must be kept.
+fn strip_trailing_bang_amp(line: &str, start_state: Option<char>) -> String {
+    if !line.trim_end().ends_with("!&") {
         return line.to_string();
     }
-    // Strip the `!&` — return the line up to and including any content before it
-    before.trim_end().to_string()
+    let scan = scan_line(line, start_state);
+    let Some(cs) = scan.comment_start else {
+        // `!&` is inside a string literal — keep.
+        return line.to_string();
+    };
+    let comment = line[cs..].trim_end();
+    // The whole comment must be a run of `!&` (optionally blank-separated).
+    let is_noop_run = {
+        let mut rest = comment;
+        let mut ok = !rest.is_empty();
+        while !rest.is_empty() {
+            if let Some(r) = rest.strip_prefix("!&") {
+                rest = r.trim_start();
+            } else {
+                ok = false;
+                break;
+            }
+        }
+        ok
+    };
+    if is_noop_run {
+        line[..cs].trim_end().to_string()
+    } else {
+        line.to_string()
+    }
+}
+
+/// Detect a `& ! comment` line (continuation marker followed only by a
+/// comment) and convert it to a plain comment line. Cray ftn (ftn-71)
+/// rejects these. Returns Some(converted) when the line matched.
+/// Must only be called for lines that do not start inside a string.
+fn amp_comment_to_comment(line: &str) -> Option<String> {
+    let trimmed = line.trim_start();
+    let stripped = trimmed.strip_prefix('&')?;
+    let after_amp = stripped.trim_start();
+    if after_amp.starts_with('!') && !after_amp.starts_with("!$") {
+        let indent = line.len() - trimmed.len();
+        Some(format!("{}{}", " ".repeat(indent), after_amp))
+    } else {
+        None
+    }
+}
+
+fn is_ffmt_off_marker(line: &str) -> bool {
+    let t = line.trim().to_ascii_lowercase();
+    t == "! ffmt off" || t == "! ffmt: off"
+}
+
+fn is_ffmt_on_marker(line: &str) -> bool {
+    let t = line.trim().to_ascii_lowercase();
+    t == "! ffmt on" || t == "! ffmt: on"
 }
 
 pub fn read_logical_lines(source: &str) -> Vec<LogicalLine> {
-    // Split into raw lines. We preserve the newline character for raw_lines but
-    // work with trimmed content for logic.
     let raw: Vec<&str> = source.split('\n').collect();
-
-    // If source ends with \n, the last element will be empty — skip it
     let raw_count = if source.ends_with('\n') && !raw.is_empty() {
         raw.len() - 1
     } else {
         raw.len()
     };
 
+    // --- Pass 1: cleaning + per-line string-state scan -------------------
+    // Cleaning (`!&` stripping, `& !` conversion) is suppressed inside
+    // `! ffmt off` regions (those must be verbatim) and on lines that begin
+    // inside a continued character literal (their text is string content).
+    let mut cleaned: Vec<String> = Vec::with_capacity(raw_count);
+    let mut was_amp_comment = vec![false; raw_count];
+    let mut starts_in_string: Vec<Option<char>> = Vec::with_capacity(raw_count);
+    let mut in_off_region = vec![false; raw_count];
+
+    let mut state: Option<char> = None;
+    let mut off = false;
+    for (i, &line) in raw.iter().take(raw_count).enumerate() {
+        if state.is_none() {
+            if is_ffmt_off_marker(line) {
+                off = true;
+            } else if is_ffmt_on_marker(line) {
+                off = false;
+            }
+        }
+        in_off_region[i] = off;
+        starts_in_string.push(state);
+
+        let mut l = line.to_string();
+        if !off && state.is_none() {
+            l = strip_trailing_bang_amp(&l, None);
+            if let Some(conv) = amp_comment_to_comment(&l) {
+                l = conv;
+                was_amp_comment[i] = true;
+            }
+        }
+
+        // Advance string state. Blank lines and comment lines inside a
+        // character-literal continuation pass the state through (they are
+        // comment lines per F2018 6.3.2.3); a content line must begin with
+        // `&` and resumes the literal right after it.
+        let t = l.trim_start();
+        state = if let Some(d) = state {
+            if t.is_empty() || t.starts_with('!') {
+                Some(d)
+            } else if let Some(rest) = t.strip_prefix('&') {
+                scan_line(rest, Some(d)).end_state
+            } else {
+                None // malformed character continuation — reset
+            }
+        } else {
+            scan_line(&l, None).end_state
+        };
+        cleaned.push(l);
+    }
+
+    // --- Pass 2: build logical lines -------------------------------------
     let mut result: Vec<LogicalLine> = Vec::new();
     let mut i = 0usize;
 
-    // Pre-process: strip trailing `!&` and convert `& ! comment` continuations
-    let cleaned: Vec<String> = raw[..raw_count]
-        .iter()
-        .map(|l| strip_amp_comment_continuation(&strip_trailing_bang_amp(l)))
-        .collect();
-
     while i < raw_count {
         let raw_line = cleaned[i].as_str();
-        let line_number = i + 1; // 1-based
+        let line_number = i + 1;
 
-        // Blank line — always its own LogicalLine
-        if raw_line.trim().is_empty() {
-            result.push(LogicalLine {
-                joined: raw_line.to_string(),
-                raw_lines: vec![raw_line.to_string()],
-                line_number,
-                hoisted_comments: Vec::new(),
-            });
+        // Verbatim inside `! ffmt off` regions: one LogicalLine per raw line.
+        if in_off_region[i] {
+            result.push(LogicalLine::single(raw_line, line_number));
             i += 1;
             continue;
         }
 
-        // Full-line comment (`! ...`) — its own LogicalLine (but not directives).
-        // We detect a comment line as one that, after stripping leading whitespace,
-        // starts with `!`. We still emit it as its own line (directives like `!$acc`
-        // also satisfy this and are emitted as their own line — both are correct).
+        // Blank line — always its own LogicalLine.
+        if raw_line.trim().is_empty() {
+            result.push(LogicalLine::single(raw_line, line_number));
+            i += 1;
+            continue;
+        }
+
+        // Full-line comment (`! ...`, including `!$` directives).
         let trimmed = raw_line.trim_start();
         if trimmed.starts_with('!') {
-            result.push(LogicalLine {
-                joined: raw_line.to_string(),
-                raw_lines: vec![raw_line.to_string()],
-                line_number,
-                hoisted_comments: Vec::new(),
-            });
+            result.push(LogicalLine::single(raw_line, line_number));
             i += 1;
             continue;
         }
 
-        // Check for Fortran continuation (`&` at end of line outside strings).
-        // Note: Fypp `!&` continuations are NOT joined — they are Fypp-level
-        // continuations handled by the Fypp preprocessor, not the formatter.
-        // The `!` starts a comment, so `find_continuation_amp` won't see the `&`.
-        let fort_cont = find_continuation_amp(raw_line).is_some();
-
-        if !fort_cont {
-            // Simple line, no continuation
-            result.push(LogicalLine {
-                joined: raw_line.to_string(),
-                raw_lines: vec![raw_line.to_string()],
-                line_number,
-                hoisted_comments: Vec::new(),
-            });
+        let first_scan = scan_line(raw_line, None);
+        let Some(first_amp) = first_scan.amp else {
+            // Simple line, no continuation.
+            result.push(LogicalLine::single(raw_line, line_number));
             i += 1;
             continue;
-        }
+        };
 
-        // Fortran continuation: gather lines joined by `&`
-        let mut raw_lines_acc: Vec<String> = Vec::new();
-        let mut joined_parts: Vec<String> = Vec::new();
+        // --- Fortran continuation: gather lines joined by `&` ------------
+        let mut raw_lines_acc: Vec<String> = vec![raw_line.to_string()];
+        let mut joined = String::new();
         let mut hoisted: Vec<String> = Vec::new();
+        let mut preserve = false;
+        // String state carried across the junction (Some(d) when the
+        // pending trailing `&` is inside a character literal).
+        let mut carry: Option<char> = first_scan.end_state;
+        // Pending text contributed up to (not including) the trailing `&`,
+        // NOT yet trimmed: trimming depends on the next line's form.
+        let mut pending: String = raw_line[..first_amp].to_string();
 
-        // Capture a `& ! comment` / `& !comment` trailer after the
-        // continuation ampersand for hoisting (it is not part of `joined`).
-        // `!$` sentinels are left alone: hoisting one to its own line would
-        // turn an inert trailer into an active directive.
-        fn hoist_amp_trailer(after_amp: &str, hoisted: &mut Vec<String>) {
-            let trailer = after_amp.trim();
-            if trailer.starts_with('!') && !trailer.starts_with("!$") {
-                hoisted.push(trailer.to_string());
+        // A `& ! comment` trailer after the continuation `&` (outside
+        // strings) is hoisted; a `& !$dir` trailer forces preserve.
+        let check_trailer = |line: &str,
+                             amp: usize,
+                             amp_in_string: bool,
+                             comment_start: Option<usize>,
+                             hoisted: &mut Vec<String>,
+                             preserve: &mut bool| {
+            if amp_in_string {
+                return;
             }
-        }
+            if let Some(cs) = comment_start {
+                if cs > amp {
+                    let trailer = line[cs..].trim_end();
+                    if trailer.starts_with("!$") {
+                        *preserve = true;
+                    } else {
+                        hoisted.push(trailer.to_string());
+                    }
+                }
+            }
+        };
+        check_trailer(
+            raw_line,
+            first_amp,
+            first_scan.amp_in_string,
+            first_scan.comment_start,
+            &mut hoisted,
+            &mut preserve,
+        );
 
-        // Process first line: strip trailing `&` and trim trailing space
-        let amp_pos = find_continuation_amp(raw_line).unwrap();
-        let first_content = raw_line[..amp_pos].trim_end().to_string();
-        hoist_amp_trailer(&raw_line[amp_pos + 1..], &mut hoisted);
-
-        raw_lines_acc.push(raw_line.to_string());
-        joined_parts.push(first_content);
-        i += 1;
-
-        // Collect continuation lines
         loop {
-            if i >= raw_count {
+            if i + 1 >= raw_count {
+                i += 1;
+                break;
+            }
+            let next_idx = i + 1;
+            let cont_line = cleaned[next_idx].as_str();
+            let cont_trim = cont_line.trim_start();
+
+            // ffmt-off marker terminates the continuation conservatively.
+            if in_off_region[next_idx] {
+                preserve = true;
+                i += 1;
                 break;
             }
 
-            let cont_line = cleaned[i].as_str();
-
-            // Blank lines inside a continuation are comment lines per the
-            // free-form standard (F2018 6.3.2.3): the statement resumes on
-            // the next non-comment line. If the next code line begins with
-            // `&`, skip the blank so the statement is rejoined (and the
-            // stray blank disappears on reformat). Otherwise stop the
-            // continuation as before.
-            if cont_line.trim().is_empty() {
-                // Peek past blanks and plain comments (comments are hoisted
-                // above the statement by the comment branch below, so joining
-                // across them is lossless).
-                let mut peek = i + 1;
-                while peek < raw_count {
-                    let p = cleaned[peek].as_str().trim_start();
-                    if p.is_empty() || (p.starts_with('!') && !p.starts_with("!$")) {
-                        peek += 1;
-                        continue;
-                    }
-                    break;
-                }
-                let more_continuation =
-                    peek < raw_count && cleaned[peek].as_str().trim_start().starts_with('&');
-                if more_continuation {
-                    // Keep the blank in raw_lines so verbatim paths
-                    // (ffmt off, out-of-range) reproduce the source, but
-                    // contribute nothing to the joined statement.
-                    raw_lines_acc.push(cont_line.to_string());
-                    i += 1;
-                    continue;
-                }
+            // Preprocessor directives interrupt the continuation — the
+            // formatter preserves the raw structure for these.
+            if cont_trim.starts_with('#') {
+                i += 1;
                 break;
             }
 
-            // Preprocessor directives (#ifdef, #ifndef, #else, #endif, #if, #define)
-            // must NOT be joined into continuation lines — they need to stay separate
-            if cont_line.trim_start().starts_with('#') {
-                break;
+            // Inside a character literal the continuation line must begin
+            // with `&` (blank/comment lines may intervene).
+            let in_string_here = carry.is_some();
+
+            // Blank line: a comment line per the standard — skip it; the
+            // statement resumes at the next non-comment line.
+            if cont_trim.is_empty() {
+                raw_lines_acc.push(cont_line.to_string());
+                i += 1;
+                continue;
             }
 
-            // If this line is a comment (possibly after `& !` was cleaned to `!`),
-            // check whether more continuation code follows. Cray ftn (ftn-71)
-            // rejects `& ! comment` lines, so these are converted to plain
-            // comments. If they appear mid-continuation (more `& code` follows),
-            // we preserve them in the raw lines but skip them in the joined
-            // content so the logical statement stays intact. If the comment is
-            // the last line of the continuation, strip the trailing `&` from the
-            // preceding code line and stop.
-            let cont_trimmed = cont_line.trim_start();
-            if cont_trimmed.starts_with('!') && !cont_trimmed.starts_with("!$") {
-                // Peek ahead past any additional blank/comment lines to see
-                // whether a continuation line (starting with `&`) follows.
-                let mut peek = i + 1;
-                while peek < raw_count {
-                    let p = cleaned[peek].as_str().trim_start();
-                    if p.is_empty() {
-                        peek += 1;
-                        continue;
-                    }
-                    if p.starts_with('!') && !p.starts_with("!$") {
-                        peek += 1;
-                        continue;
-                    }
-                    break;
-                }
-                let more_continuation =
-                    peek < raw_count && cleaned[peek].as_str().trim_start().starts_with('&');
+            // Full-line `!$` directive sentinel inside the continuation
+            // (bare or behind a leading `&`): cannot be hoisted (it would
+            // change semantics) and cannot stay mid-statement when
+            // rebuilding — preserve the raw structure.
+            let is_directive_line = cont_trim.starts_with("!$")
+                || cont_trim
+                    .strip_prefix('&')
+                    .is_some_and(|r| r.trim_start().starts_with("!$"));
+            if !in_string_here && is_directive_line {
+                preserve = true;
+                raw_lines_acc.push(cont_line.to_string());
+                i += 1;
+                continue;
+            }
 
-                if more_continuation {
-                    // Mid-continuation comment: keep in raw lines so the
-                    // original structure is preserved in the
-                    // continuation_interrupted path, but don't add any content
-                    // to joined_parts (comments carry no code). Record it for
-                    // hoisting — the normal emission path rebuilds the
-                    // statement from `joined` and would otherwise lose it.
-                    hoisted.push(cont_trimmed.trim_end().to_string());
-                    raw_lines_acc.push(cont_line.to_string());
-                    i += 1;
-                    continue;
-                } else {
-                    // Terminal comment: strip trailing `&` from the last code
-                    // line and stop — the comment becomes its own logical line.
-                    if let Some(last_raw) = raw_lines_acc.last_mut() {
-                        if let Some(pos) = find_continuation_amp(last_raw) {
-                            *last_raw = last_raw[..pos].trim_end().to_string();
+            // Comment line.
+            if !in_string_here && cont_trim.starts_with('!') {
+                if was_amp_comment[next_idx] {
+                    // Originally `& ! comment`: a continuation line with
+                    // empty content that does not itself end with `&` — the
+                    // statement TERMINATES here (gfortran semantics). The
+                    // dangling `&` is repaired unless code follows on a
+                    // leading-`&` line (then we join and hoist: the input
+                    // was invalid, this repairs it).
+                    let mut peek = next_idx + 1;
+                    while peek < raw_count {
+                        let p = cleaned[peek].as_str().trim_start();
+                        if p.is_empty() || (p.starts_with('!') && !p.starts_with("!$")) {
+                            peek += 1;
+                            continue;
                         }
+                        break;
                     }
-                    break;
+                    let amp_follows =
+                        peek < raw_count && cleaned[peek].as_str().trim_start().starts_with('&');
+                    if amp_follows {
+                        hoisted.push(cont_trim.trim_end().to_string());
+                        raw_lines_acc.push(cont_line.to_string());
+                        i += 1;
+                        continue;
+                    } else {
+                        // Terminate: strip the dangling `&` from the last
+                        // code line; the comment becomes its own line.
+                        if let Some(last_raw) = raw_lines_acc.last_mut() {
+                            if let Some(pos) = find_continuation_amp(last_raw) {
+                                *last_raw = last_raw[..pos].trim_end().to_string();
+                            }
+                        }
+                        i += 1;
+                        break;
+                    }
                 }
+                // Plain comment line inside the continuation: hoist it and
+                // keep going — the statement resumes at the next
+                // non-comment line whether or not it has a leading `&`.
+                hoisted.push(cont_trim.trim_end().to_string());
+                raw_lines_acc.push(cont_line.to_string());
+                i += 1;
+                continue;
+            }
+
+            // --- Code line: splice it ------------------------------------
+            let had_leading_amp = cont_trim.starts_with('&');
+
+            if in_string_here && !had_leading_amp {
+                // Malformed character continuation — keep everything as-is.
+                preserve = true;
+                raw_lines_acc.push(cont_line.to_string());
+                // Recover: treat this line as ending the statement.
+                joined.push_str(&pending);
+                pending = String::new();
+                joined.push(' ');
+                joined.push_str(cont_trim.trim_end());
+                i = next_idx + 1;
+                break;
             }
 
             raw_lines_acc.push(cont_line.to_string());
 
-            // Track whether this continuation line had a leading `&`.
-            // Per the Fortran free-form standard, when `&` is the last
-            // non-blank character on line N and line N+1 begins with `&`,
-            // the statement continues immediately after the leading `&`
-            // with NO implicit space inserted (the two tokens are glued).
-            // When line N+1 does NOT begin with `&`, one implicit space
-            // is inserted.  This matters for member access: `x &\n& %y`
-            // must join as `x%y`, not `x %y`.
-            let had_leading_amp = cont_line.trim_start().starts_with('&');
-
-            // Strip leading `&` if present
-            let stripped = strip_leading_amp(cont_line);
-
-            // Check if this continuation line itself continues further
-            let this_fort = find_continuation_amp(stripped).is_some();
-
-            let content = if this_fort {
-                let amp_pos = find_continuation_amp(stripped).unwrap();
-                hoist_amp_trailer(&stripped[amp_pos + 1..], &mut hoisted);
-                stripped[..amp_pos].trim_end().to_string()
+            // The contributed content cuts at the trailing `&` when the
+            // statement continues further. On the FINAL line (no trailing
+            // `&`), keep the whole text INCLUDING any inline comment — it
+            // belongs to the statement and is emitted as a normal trailing
+            // comment.
+            let (content, this_scan): (String, LineScan) = if had_leading_amp {
+                let amp_off = cont_line.len() - cont_trim.len();
+                let after = &cont_line[amp_off + 1..];
+                let scan = scan_line(after, carry);
+                let content = match scan.amp {
+                    Some(a) => after[..a].to_string(),
+                    None => after.trim_end().to_string(),
+                };
+                (content, scan)
             } else {
-                stripped.to_string()
+                let scan = scan_line(cont_line, None);
+                let content = match scan.amp {
+                    Some(a) => cont_line[..a].to_string(),
+                    None => cont_line.trim_end().to_string(),
+                };
+                (content, scan)
             };
 
-            let content_trimmed = content.trim_start();
-            // Suppress the space separator when the continuation starts with
-            // `%` (member accessor).  Adding a space there would produce
-            // `a %b` which is a blank within a lexical token — invalid in
-            // Fortran free-form (§6.3.2.2).
-            let sep = if had_leading_amp && content_trimmed.starts_with('%') {
-                ""
-            } else {
-                " "
-            };
-            joined_parts.push(format!("{}{}", sep, content_trimmed));
-            i += 1;
+            if let Some(a_rel) = this_scan.amp {
+                // Find absolute amp pos for trailer check.
+                let (line_for_trailer, abs_amp) = if had_leading_amp {
+                    let amp_off = cont_line.len() - cont_trim.len();
+                    (cont_line, amp_off + 1 + a_rel)
+                } else {
+                    (cont_line, a_rel)
+                };
+                let abs_comment = this_scan.comment_start.map(|c| {
+                    if had_leading_amp {
+                        let amp_off = cont_line.len() - cont_trim.len();
+                        amp_off + 1 + c
+                    } else {
+                        c
+                    }
+                });
+                check_trailer(
+                    line_for_trailer,
+                    abs_amp,
+                    this_scan.amp_in_string,
+                    abs_comment,
+                    &mut hoisted,
+                    &mut preserve,
+                );
+            }
 
-            if !this_fort {
+            // Splice `pending` + this content per F2018 6.3.2.4:
+            //  - inside a character literal: verbatim — every character on
+            //    both sides of the junction is string content;
+            //  - leading `&`, no blanks at the junction: the two pieces glue
+            //    into one token (split identifiers/literals) — verbatim;
+            //  - leading `&` with blanks on either side: the tokens are
+            //    separate; normalize to a single blank (the historical
+            //    joined form, which downstream passes expect). `%` member
+            //    access glues tight to keep rewrapped statements stable;
+            //  - no leading `&`: continue at the first non-blank character,
+            //    with one implicit blank.
+            if had_leading_amp {
+                if in_string_here {
+                    joined.push_str(&pending);
+                    joined.push_str(&content);
+                } else if content.trim_start().starts_with('%') {
+                    joined.push_str(pending.trim_end());
+                    joined.push_str(content.trim_start());
+                } else {
+                    let ws_boundary = pending.ends_with(char::is_whitespace)
+                        || pending.is_empty()
+                        || content.starts_with(char::is_whitespace)
+                        || content.is_empty();
+                    if ws_boundary {
+                        joined.push_str(pending.trim_end());
+                        joined.push(' ');
+                        joined.push_str(content.trim_start());
+                    } else {
+                        joined.push_str(&pending);
+                        joined.push_str(&content);
+                    }
+                }
+            } else {
+                joined.push_str(pending.trim_end());
+                joined.push(' ');
+                joined.push_str(content.trim_start());
+            }
+
+            carry = this_scan.end_state;
+            i = next_idx; // this line is consumed
+
+            if this_scan.amp.is_none() {
+                pending = String::new();
+                i += 1; // point past the final line of the statement
                 break;
             }
+            // The spliced content is now the prefix of the next junction:
+            // move it back into pending.
+            pending = joined;
+            joined = String::new();
         }
 
-        let joined = joined_parts.join("");
+        if !pending.is_empty() {
+            // Continuation ran off the end of the file (or terminated at a
+            // `& !` comment): emit what we have, without the dangling text
+            // being lost.
+            joined.push_str(pending.trim_end());
+        }
+
         result.push(LogicalLine {
             joined,
             raw_lines: raw_lines_acc,
             line_number,
             hoisted_comments: hoisted,
+            preserve,
         });
     }
 

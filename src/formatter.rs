@@ -438,11 +438,17 @@ pub fn format_with_config(source: &str, config: &Config, range: Option<(usize, u
                         let last_raw = ll.raw_lines.last().map(|s| s.trim_end()).unwrap_or("");
                         let continuation_interrupted = next_is_cpp && last_raw.ends_with('&');
 
-                        if continuation_interrupted {
+                        if continuation_interrupted || ll.preserve {
                             // Preserve original structure — emit each raw line
-                            // with keyword + case normalization only
+                            // with keyword + case normalization only. Comment
+                            // and `!$` directive lines are kept verbatim:
+                            // normalization must not touch them.
                             for (ri, rl) in ll.raw_lines.iter().enumerate() {
                                 let t = rl.trim_end();
+                                if t.trim_start().starts_with('!') {
+                                    output_lines.push(t.to_string());
+                                    continue;
+                                }
                                 let mut processed = t.to_string();
                                 if config.normalize_keywords.is_enabled() {
                                     processed = normalize_keywords(&processed);

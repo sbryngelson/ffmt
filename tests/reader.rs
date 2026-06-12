@@ -95,7 +95,12 @@ fn test_blank_line_inside_continuation_joined() {
         1,
         "blank inside continuation split the logical line"
     );
-    assert_eq!(lines[0].joined, "subroutine foo(a, b, c, d, e)");
+    let j = lines[0]
+        .joined
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert_eq!(j, "subroutine foo(a, b, c, d, e)");
 }
 
 #[test]
@@ -106,7 +111,12 @@ fn test_blank_then_comment_inside_continuation_joined_and_hoisted() {
     let input = "call foo(a, &\n\n    ! note\n    & b)\n";
     let lines = read_logical_lines(input);
     assert_eq!(lines.len(), 1);
-    assert_eq!(lines[0].joined, "call foo(a, b)");
+    let j = lines[0]
+        .joined
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert_eq!(j, "call foo(a, b)");
     assert_eq!(lines[0].hoisted_comments, vec!["! note"]);
 }
 
@@ -114,7 +124,12 @@ fn test_blank_then_comment_inside_continuation_joined_and_hoisted() {
 fn test_comment_then_blank_inside_continuation_hoisted() {
     let input = "call foo(a, &\n    ! note\n\n    & b)\n";
     let lines = read_logical_lines(input);
-    assert_eq!(lines[0].joined, "call foo(a, b)");
+    let j = lines[0]
+        .joined
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert_eq!(j, "call foo(a, b)");
     assert_eq!(lines[0].hoisted_comments, vec!["! note"]);
 }
 
@@ -125,15 +140,152 @@ fn test_trailing_amp_comment_hoisted() {
     let input = "call foo(a, & ! why a\n    & b, & ! why b\n    & c)\n";
     let lines = read_logical_lines(input);
     assert_eq!(lines.len(), 1);
-    assert_eq!(lines[0].joined, "call foo(a, b, c)");
+    let j = lines[0]
+        .joined
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert_eq!(j, "call foo(a, b, c)");
     assert_eq!(lines[0].hoisted_comments, vec!["! why a", "! why b"]);
 }
 
 #[test]
-fn test_blank_after_amp_without_leading_amp_not_joined() {
-    // Conservative: if the next code line does not begin with `&`, keep the
-    // old behavior (stop the continuation at the blank).
-    let input = "x = a + &\n\nend subroutine\n";
+fn test_blank_then_no_amp_resume_joins() {
+    // Per the standard (and gfortran): blank lines are comment lines; the
+    // statement resumes at the next non-comment line with or without a
+    // leading `&`.
+    let input = "x = a + &\n\n    b\n";
     let lines = read_logical_lines(input);
-    assert_eq!(lines.len(), 3);
+    assert_eq!(lines.len(), 1);
+    let j = lines[0]
+        .joined
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert_eq!(j, "x = a + b");
+}
+
+// --- Bug hunt: F2018 6.3.2.4 splice semantics ---
+
+#[test]
+fn test_split_string_literal_glued() {
+    // Trailing & + leading & splice with NO inserted space: split string
+    // literals must reassemble exactly.
+    let input = "print *, 'abc&\n&def'\n";
+    let lines = read_logical_lines(input);
+    assert_eq!(lines.len(), 1);
+    assert!(
+        lines[0].joined.contains("'abcdef'"),
+        "string splice corrupted: {}",
+        lines[0].joined
+    );
+}
+
+#[test]
+fn test_split_string_literal_interior_spaces_kept() {
+    // Blanks before the trailing & inside a character literal are content.
+    let input = "print *, 'a  &\n&b'\n";
+    let lines = read_logical_lines(input);
+    assert!(
+        lines[0].joined.contains("'a  b'"),
+        "interior spaces lost: {}",
+        lines[0].joined
+    );
+}
+
+#[test]
+fn test_split_identifier_glued() {
+    let input = "x = verylong&\n&name + 1\n";
+    let lines = read_logical_lines(input);
+    assert!(
+        lines[0].joined.contains("verylongname"),
+        "split identifier not glued: {}",
+        lines[0].joined
+    );
+}
+
+#[test]
+fn test_separate_tokens_not_merged() {
+    // `integer &` has a blank before the &, so the tokens stay separate.
+    let input = "integer &\n& x\n";
+    let lines = read_logical_lines(input);
+    let j = &lines[0].joined;
+    assert!(
+        j.contains("integer x") || j.contains("integer  x"),
+        "tokens wrongly merged: {j}"
+    );
+    assert!(!j.contains("integerx"), "tokens wrongly merged: {j}");
+}
+
+#[test]
+fn test_amp_comment_inside_continued_string_not_converted() {
+    // The `& !` on the second line is INSIDE a continued character literal —
+    // it must not be converted to a comment line.
+    let input = "x = 'one &\n& ! two'\n";
+    let lines = read_logical_lines(input);
+    assert_eq!(lines.len(), 1);
+    assert!(
+        lines[0].joined.contains("! two'"),
+        "string contents destroyed: {}",
+        lines[0].joined
+    );
+}
+
+#[test]
+fn test_plain_comment_then_no_amp_resume_joins() {
+    // Valid per the standard (and gfortran): a plain comment line inside a
+    // continuation, statement resumes WITHOUT a leading &.
+    let input = "x = a + &\n    ! note\n    b\n";
+    let lines = read_logical_lines(input);
+    assert_eq!(lines.len(), 1, "statement was fragmented");
+    let j = lines[0]
+        .joined
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert_eq!(j, "x = a + b");
+    assert_eq!(lines[0].hoisted_comments, vec!["! note"]);
+}
+
+#[test]
+fn test_amp_comment_line_terminates_statement() {
+    // `& ! comment` is a continuation line with empty content that does not
+    // itself end with & — per gfortran the statement TERMINATES. The dangling
+    // & on the previous line is repaired (stripped).
+    let input = "case (101) &\n    & ! dangling\nx = 2\n";
+    let lines = read_logical_lines(input);
+    assert!(
+        lines.len() >= 3,
+        "statement wrongly joined across & ! comment"
+    );
+    assert_eq!(lines[0].joined.trim(), "case (101)");
+}
+
+#[test]
+fn test_bang_amp_inside_comment_text_kept() {
+    let input = "! see foo!&\n";
+    let lines = read_logical_lines(input);
+    assert_eq!(lines[0].joined, "! see foo!&");
+}
+
+#[test]
+fn test_directive_line_mid_continuation_preserved() {
+    // A !$omp sentinel inside a continuation must not be absorbed as text;
+    // the logical line is marked preserve and emitted verbatim.
+    let input = "x = a + &\n!$omp parallel\n& b\n";
+    let lines = read_logical_lines(input);
+    assert_eq!(lines.len(), 1);
+    assert!(
+        lines[0].preserve,
+        "directive-bearing continuation not preserved"
+    );
+    assert_eq!(lines[0].raw_lines.len(), 3);
+}
+
+#[test]
+fn test_directive_trailer_after_amp_preserved() {
+    let input = "x = a + & !$acc some clause\n& b\n";
+    let lines = read_logical_lines(input);
+    assert_eq!(lines.len(), 1);
+    assert!(lines[0].preserve, "directive trailer not preserved");
 }
