@@ -60,13 +60,17 @@ pub fn normalize_whitespace(line: &str, ws_config: &WhitespaceConfig) -> String 
     }
 
     // Skip whitespace normalization for namelist statements —
-    // the / delimiters are not division operators
-    if trimmed
+    // the / delimiters are not division operators. Require a word boundary
+    // so identifiers like `namelist_foo` are still normalized.
+    if let Some(rest) = trimmed
         .trim_start()
         .to_ascii_lowercase()
-        .starts_with("namelist")
+        .strip_prefix("namelist")
     {
-        return trimmed.to_string();
+        let at_word_boundary = !rest.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_');
+        if at_word_boundary {
+            return trimmed.to_string();
+        }
     }
 
     let tokens = tokenize(trimmed);
@@ -545,9 +549,16 @@ fn tokenize(line: &str) -> Vec<Token> {
             continue;
         }
 
-        // `::` (declaration separator)
+        // `::` — declaration separator at paren depth 0. Inside parens it is
+        // an array slice with omitted bound plus stride (e.g. `a(1::2)`), so
+        // treat it like a slice colon there.
         if ch == b':' && i + 1 < len && bytes[i + 1] == b':' {
-            tokens.push(Token::Op(OpKind::DoubleColon, String::from("::")));
+            let kind = if paren_depth > 0 {
+                OpKind::SliceColon
+            } else {
+                OpKind::DoubleColon
+            };
+            tokens.push(Token::Op(kind, String::from("::")));
             i += 2;
             continue;
         }
@@ -738,30 +749,81 @@ fn tokenize(line: &str) -> Vec<Token> {
     tokens
 }
 
-/// Determine if the current +/- should be treated as unary based on preceding tokens.
-/// Check if `*` is an I/O format specifier (after print/read/write or after comma in I/O).
+/// Return true if `s` is one of the I/O statement keywords.
+fn is_io_keyword(s: &str) -> bool {
+    let lower = s.trim().to_ascii_lowercase();
+    lower == "print" || lower == "read" || lower == "write"
+}
+
+/// Check that the I/O keyword Text token at `idx` is in statement-keyword
+/// position: it may be preceded only by spaces, semicolons, a numeric
+/// statement label, or a closing paren (e.g. `if (cond) print *, x`).
+/// This rejects expression uses like `z = read * 2`, where `read` is just a
+/// variable name.
+fn io_keyword_in_statement_position(tokens: &[Token], idx: usize) -> bool {
+    for token in tokens[..idx].iter().rev() {
+        match token {
+            Token::Space => continue,
+            Token::Op(OpKind::Semicolon, _) | Token::Op(OpKind::CloseParen, _) => return true,
+            Token::Text(s) => {
+                let t = s.trim();
+                return !t.is_empty() && t.bytes().all(|b| b.is_ascii_digit());
+            }
+            _ => return false,
+        }
+    }
+    true
+}
+
+/// Check if `*` is an I/O format specifier: directly after a statement-position
+/// `print`/`read`/`write` keyword, or inside the parenthesized control list of
+/// `read(...)`/`write(...)` (e.g. `write(*, *)`).
 fn is_io_format_star(tokens: &[Token]) -> bool {
-    for token in tokens.iter().rev() {
+    for (idx, token) in tokens.iter().enumerate().rev() {
         match token {
             Token::Space => continue,
             Token::Text(s) => {
-                let lower = s.trim().to_ascii_lowercase();
-                return lower == "print" || lower == "read" || lower == "write";
+                return is_io_keyword(s) && io_keyword_in_statement_position(tokens, idx);
             }
             Token::Op(OpKind::Comma, _) => {
-                // Could be `write(*, *)` — the * after comma in I/O context.
-                // Check if there's an I/O keyword earlier.
-                for t in tokens.iter().rev() {
-                    if let Token::Text(s) = t {
-                        let lower = s.trim().to_ascii_lowercase();
-                        if lower == "print" || lower == "read" || lower == "write" {
-                            return true;
+                // Could be `write(*, *)` — the * after a comma inside the I/O
+                // control list. Require the enclosing `(` to be opened by a
+                // statement-position I/O keyword.
+                return star_in_io_control_list(tokens);
+            }
+            _ => return false,
+        }
+    }
+    false
+}
+
+/// Check whether the tokens so far place us inside the parenthesized control
+/// list of an I/O statement, i.e. `read (` / `write (` opened by a
+/// statement-position keyword.
+fn star_in_io_control_list(tokens: &[Token]) -> bool {
+    let mut depth: i32 = 0;
+    for (idx, token) in tokens.iter().enumerate().rev() {
+        match token {
+            Token::Op(OpKind::CloseParen, _) => depth += 1,
+            Token::Op(OpKind::OpenParen, _) => {
+                if depth > 0 {
+                    depth -= 1;
+                    continue;
+                }
+                // Found the enclosing open paren — check the keyword before it.
+                for (kidx, t) in tokens[..idx].iter().enumerate().rev() {
+                    match t {
+                        Token::Space => continue,
+                        Token::Text(s) => {
+                            return is_io_keyword(s)
+                                && io_keyword_in_statement_position(tokens, kidx);
                         }
+                        _ => return false,
                     }
                 }
                 return false;
             }
-            _ => return false,
+            _ => {}
         }
     }
     false
