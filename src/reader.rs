@@ -4,6 +4,14 @@ pub struct LogicalLine {
     pub joined: String,
     pub raw_lines: Vec<String>,
     pub line_number: usize,
+    /// Comments found inside the `&` continuation: full-line comments between
+    /// continuation lines and `& ! comment` trailers. Comments are never left
+    /// in the middle of a continuation (some compilers reject them and they
+    /// are lost when the statement is re-emitted from `joined`) — the
+    /// formatter hoists these above the statement. OpenMP/OpenACC `!$`
+    /// sentinels are excluded: hoisting one to its own line would turn an
+    /// inert trailer into an active directive.
+    pub hoisted_comments: Vec<String>,
 }
 
 /// Scan a line and return the index of a trailing `&` continuation character.
@@ -164,6 +172,7 @@ pub fn read_logical_lines(source: &str) -> Vec<LogicalLine> {
                 joined: raw_line.to_string(),
                 raw_lines: vec![raw_line.to_string()],
                 line_number,
+                hoisted_comments: Vec::new(),
             });
             i += 1;
             continue;
@@ -179,6 +188,7 @@ pub fn read_logical_lines(source: &str) -> Vec<LogicalLine> {
                 joined: raw_line.to_string(),
                 raw_lines: vec![raw_line.to_string()],
                 line_number,
+                hoisted_comments: Vec::new(),
             });
             i += 1;
             continue;
@@ -196,6 +206,7 @@ pub fn read_logical_lines(source: &str) -> Vec<LogicalLine> {
                 joined: raw_line.to_string(),
                 raw_lines: vec![raw_line.to_string()],
                 line_number,
+                hoisted_comments: Vec::new(),
             });
             i += 1;
             continue;
@@ -204,10 +215,23 @@ pub fn read_logical_lines(source: &str) -> Vec<LogicalLine> {
         // Fortran continuation: gather lines joined by `&`
         let mut raw_lines_acc: Vec<String> = Vec::new();
         let mut joined_parts: Vec<String> = Vec::new();
+        let mut hoisted: Vec<String> = Vec::new();
+
+        // Capture a `& ! comment` / `& !comment` trailer after the
+        // continuation ampersand for hoisting (it is not part of `joined`).
+        // `!$` sentinels are left alone: hoisting one to its own line would
+        // turn an inert trailer into an active directive.
+        fn hoist_amp_trailer(after_amp: &str, hoisted: &mut Vec<String>) {
+            let trailer = after_amp.trim();
+            if trailer.starts_with('!') && !trailer.starts_with("!$") {
+                hoisted.push(trailer.to_string());
+            }
+        }
 
         // Process first line: strip trailing `&` and trim trailing space
         let amp_pos = find_continuation_amp(raw_line).unwrap();
         let first_content = raw_line[..amp_pos].trim_end().to_string();
+        hoist_amp_trailer(&raw_line[amp_pos + 1..], &mut hoisted);
 
         raw_lines_acc.push(raw_line.to_string());
         joined_parts.push(first_content);
@@ -221,8 +245,35 @@ pub fn read_logical_lines(source: &str) -> Vec<LogicalLine> {
 
             let cont_line = cleaned[i].as_str();
 
-            // Blank lines are NEVER joined — stop continuation
+            // Blank lines inside a continuation are comment lines per the
+            // free-form standard (F2018 6.3.2.3): the statement resumes on
+            // the next non-comment line. If the next code line begins with
+            // `&`, skip the blank so the statement is rejoined (and the
+            // stray blank disappears on reformat). Otherwise stop the
+            // continuation as before.
             if cont_line.trim().is_empty() {
+                // Peek past blanks and plain comments (comments are hoisted
+                // above the statement by the comment branch below, so joining
+                // across them is lossless).
+                let mut peek = i + 1;
+                while peek < raw_count {
+                    let p = cleaned[peek].as_str().trim_start();
+                    if p.is_empty() || (p.starts_with('!') && !p.starts_with("!$")) {
+                        peek += 1;
+                        continue;
+                    }
+                    break;
+                }
+                let more_continuation =
+                    peek < raw_count && cleaned[peek].as_str().trim_start().starts_with('&');
+                if more_continuation {
+                    // Keep the blank in raw_lines so verbatim paths
+                    // (ffmt off, out-of-range) reproduce the source, but
+                    // contribute nothing to the joined statement.
+                    raw_lines_acc.push(cont_line.to_string());
+                    i += 1;
+                    continue;
+                }
                 break;
             }
 
@@ -264,7 +315,10 @@ pub fn read_logical_lines(source: &str) -> Vec<LogicalLine> {
                     // Mid-continuation comment: keep in raw lines so the
                     // original structure is preserved in the
                     // continuation_interrupted path, but don't add any content
-                    // to joined_parts (comments carry no code).
+                    // to joined_parts (comments carry no code). Record it for
+                    // hoisting — the normal emission path rebuilds the
+                    // statement from `joined` and would otherwise lose it.
+                    hoisted.push(cont_trimmed.trim_end().to_string());
                     raw_lines_acc.push(cont_line.to_string());
                     i += 1;
                     continue;
@@ -300,6 +354,7 @@ pub fn read_logical_lines(source: &str) -> Vec<LogicalLine> {
 
             let content = if this_fort {
                 let amp_pos = find_continuation_amp(stripped).unwrap();
+                hoist_amp_trailer(&stripped[amp_pos + 1..], &mut hoisted);
                 stripped[..amp_pos].trim_end().to_string()
             } else {
                 stripped.to_string()
@@ -328,6 +383,7 @@ pub fn read_logical_lines(source: &str) -> Vec<LogicalLine> {
             joined,
             raw_lines: raw_lines_acc,
             line_number,
+            hoisted_comments: hoisted,
         });
     }
 

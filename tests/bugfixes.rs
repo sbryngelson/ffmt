@@ -219,3 +219,148 @@ fn test_real_exponent_signs_untouched() {
         "exponent literals were modified:\n{out}"
     );
 }
+
+// --- Blank line inside a continued statement (MFC m_riemann_solvers.fpp) ---
+
+#[test]
+fn test_blank_line_inside_continuation_removed() {
+    // ffmt <= 0.4.1 preserved a stray blank line between a trailing-& line and
+    // its leading-& continuation forever. The statement must be rejoined and
+    // rewrapped with the blank gone.
+    let src = "\
+module m
+
+    implicit none
+
+contains
+
+    subroutine s_riemann_solver(qL_prim_rsx_vf, dqL_prim_dx_vf, dqL_prim_dy_vf, dqL_prim_dz_vf, &
+
+        & qL_prim_vf, qR_prim_rsx_vf, dqR_prim_dx_vf, dqR_prim_dy_vf, dqR_prim_dz_vf, qR_prim_vf, q_prim_vf, flux_vf, &
+            & flux_src_vf, flux_gsrc_vf, norm_dir, ix, iy, iz)
+
+        integer :: norm_dir
+
+    end subroutine s_riemann_solver
+
+end module m
+";
+    let out = ffmt::format_string(src);
+    // No blank line may remain between a `&` line and its continuation
+    let lines: Vec<&str> = out.lines().collect();
+    for w in lines.windows(2) {
+        assert!(
+            !(w[0].trim_end().ends_with('&') && w[1].trim().is_empty()),
+            "blank line after continuation `&` survived:\n{out}"
+        );
+    }
+    assert!(
+        out.contains("norm_dir, ix, iy, iz)"),
+        "argument list lost:\n{out}"
+    );
+}
+
+#[test]
+fn test_short_continuation_with_blank_rejoined() {
+    // Also for statements short enough that no rewrap is triggered.
+    let src = "program t\n    x = a + &\n\n        & b\nend program t\n";
+    let out = ffmt::format_string(src);
+    assert!(
+        !out.contains("+ &\n\n"),
+        "blank inside continuation survived:\n{out}"
+    );
+    assert!(
+        out.contains("x = a + b") || out.contains("& b"),
+        "statement content lost:\n{out}"
+    );
+}
+
+// --- Comments are never left (or lost) inside a continuation ---
+
+#[test]
+fn test_mid_continuation_comment_hoisted_not_dropped() {
+    // ffmt <= 0.4.1 silently DELETED a comment line placed between
+    // continuation lines. It must be hoisted above the statement instead.
+    let src = "program t\n    call foo(a, &\n        ! note\n        & b)\nend program t\n";
+    let out = ffmt::format_string(src);
+    assert!(out.contains("! note"), "comment was deleted:\n{out}");
+    let note_pos = out.find("! note").unwrap();
+    let call_pos = out.find("call foo").unwrap();
+    assert!(
+        note_pos < call_pos,
+        "comment not hoisted above statement:\n{out}"
+    );
+    assert!(
+        out.contains("call foo(a, b)"),
+        "statement not rejoined:\n{out}"
+    );
+}
+
+#[test]
+fn test_trailing_amp_comment_hoisted_not_dropped() {
+    let src = "program t\n    call foo(a, & ! why a\n        & b)\nend program t\n";
+    let out = ffmt::format_string(src);
+    assert!(out.contains("! why a"), "comment was deleted:\n{out}");
+    assert!(
+        out.contains("call foo(a, b)"),
+        "statement not rejoined:\n{out}"
+    );
+    assert!(
+        out.find("! why a").unwrap() < out.find("call foo").unwrap(),
+        "comment not hoisted above statement:\n{out}"
+    );
+}
+
+#[test]
+fn test_blank_and_comment_inside_continuation_both_handled() {
+    let src = "program t\n    call foo(a, &\n\n        ! note\n        & b)\nend program t\n";
+    let out = ffmt::format_string(src);
+    assert!(out.contains("! note"), "comment was deleted:\n{out}");
+    assert!(
+        out.contains("call foo(a, b)"),
+        "statement not rejoined:\n{out}"
+    );
+}
+
+#[test]
+fn test_hoisted_comments_idempotent() {
+    let src = "program t\n    call foo(a, &\n        ! note one\n        ! note two\n        & b)\nend program t\n";
+    let once = ffmt::format_string(src);
+    let twice = ffmt::format_string(&once);
+    assert_eq!(once, twice, "hoisting is not idempotent");
+    // Consecutive short comments are merged by join_short_comments (general
+    // ffmt comment policy) — both texts must survive, in order.
+    let one = once.find("note one").expect("first comment lost");
+    let two = once.find("note two").expect("second comment lost");
+    assert!(one < two, "comment order not preserved:\n{once}");
+    let comment_pos = once.find("! note").expect("comment marker lost");
+    assert!(
+        comment_pos < once.find("call foo").unwrap(),
+        "comments not hoisted above statement:\n{once}"
+    );
+}
+
+#[test]
+fn test_ffmt_off_keeps_mid_continuation_comment_verbatim() {
+    let src = "program t\n    ! ffmt off\n    call foo(a, &\n        ! note\n        & b)\n    ! ffmt on\nend program t\n";
+    let out = ffmt::format_string(src);
+    assert!(
+        out.contains("call foo(a, &\n        ! note\n        & b)"),
+        "ffmt off region was not preserved verbatim:\n{out}"
+    );
+}
+
+#[test]
+fn test_trailing_amp_comment_no_space_hoisted() {
+    // `& !this is a comment` (no space after `!`) must also be preserved.
+    let src = "program t\n    call foo(a, & !this is a comment\n        & b)\nend program t\n";
+    let out = ffmt::format_string(src);
+    assert!(
+        out.contains("this is a comment"),
+        "comment was deleted:\n{out}"
+    );
+    assert!(
+        out.contains("call foo(a, b)"),
+        "statement not rejoined:\n{out}"
+    );
+}

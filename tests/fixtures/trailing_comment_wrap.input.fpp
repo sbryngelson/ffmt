@@ -13,12 +13,12 @@ subroutine test_trailing_comment()
     ! Short trailing comment that fits — should stay inline
     call some_sub(a, b, c) ! quick note
 
-    ! Mid-continuation comment: code must stay intact (comment is dropped)
+    ! Mid-continuation comment: hoisted above, code stays intact
     call some_sub(arg1, arg2, &
       & ! comment about args
       & arg3, arg4)
 
-    ! Mid-continuation comment with multiple following continuations
+    ! Mid-continuation comment with multiple following continuations: hoisted
     x = 1+2+3 &
       & ! explain the split
       & + y + z

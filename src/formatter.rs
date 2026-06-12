@@ -364,6 +364,12 @@ pub fn format_with_config(source: &str, config: &Config, range: Option<(usize, u
                         // normalizer can't parse correctly.
                         // For multi-line, use the joined line (reader normalizes spacing).
                         let source = if ll.raw_lines.len() > 1 {
+                            emit_hoisted_comments(
+                                &ll.hoisted_comments,
+                                depth,
+                                config,
+                                &mut output_lines,
+                            );
                             &ll.joined
                         } else {
                             trimmed
@@ -460,6 +466,17 @@ pub fn format_with_config(source: &str, config: &Config, range: Option<(usize, u
                             }
                             break;
                         }
+
+                        // Comments found inside the continuation are hoisted
+                        // above the statement: re-emitting from the joined
+                        // text would lose them, and leaving them between
+                        // continuation lines is rejected by some compilers.
+                        emit_hoisted_comments(
+                            &ll.hoisted_comments,
+                            depth,
+                            config,
+                            &mut output_lines,
+                        );
 
                         // Normal multi-line: unravel joined line, normalize, rewrap
                         let processed = process_line(&ll.joined, config);
@@ -652,6 +669,29 @@ pub fn format_with_config(source: &str, config: &Config, range: Option<(usize, u
 
 /// Check if a line is a `! ffmt off` or `! ffmt on` marker.
 /// Returns Some(true) for off, Some(false) for on, None otherwise.
+/// Emit comments hoisted out of a `&` continuation as full-line comments
+/// above the statement, at the statement's indent.
+fn emit_hoisted_comments(
+    comments: &[String],
+    depth: usize,
+    config: &Config,
+    output_lines: &mut Vec<String>,
+) {
+    for comment in comments {
+        let c = if config.unicode_to_ascii {
+            crate::unicode::replace_unicode(comment)
+        } else {
+            comment.clone()
+        };
+        let c = if config.space_after_comment.is_enabled() {
+            normalize_comment_space(&c)
+        } else {
+            c
+        };
+        output_lines.push(apply_indent(&c, depth, config.indent_width));
+    }
+}
+
 fn is_ffmt_marker(line: &str) -> Option<bool> {
     let t = line.trim().to_ascii_lowercase();
     if t == "! ffmt off" || t == "! ffmt: off" {
