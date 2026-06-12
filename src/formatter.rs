@@ -87,6 +87,9 @@ pub fn format_with_config(source: &str, config: &Config, range: Option<(usize, u
     let logical_lines = read_logical_lines(src);
     let mut tracker = ScopeTracker::new();
     let mut output_lines: Vec<String> = Vec::new();
+    // Output index intervals emitted verbatim for out-of-range logical lines
+    // (range mode): post-passes must not touch them.
+    let mut protected_ranges: Vec<(usize, usize)> = Vec::new();
     let mut consecutive_blanks: usize = 0;
     let mut skip_next_blank = false;
     // Track whether we just emitted an end procedure line (for blank line insertion).
@@ -170,6 +173,9 @@ pub fn format_with_config(source: &str, config: &Config, range: Option<(usize, u
                 }
             }
             let _ = tracker.process(kind);
+            if !in_range {
+                protected_ranges.push((output_lines.len(), output_lines.len() + 1));
+            }
             output_lines.push(String::new());
             idx += 1;
             continue;
@@ -245,9 +251,11 @@ pub fn format_with_config(source: &str, config: &Config, range: Option<(usize, u
 
         // --- If outside range, emit unchanged ---
         if !in_range {
+            let start = output_lines.len();
             for raw_line in &ll.raw_lines {
                 output_lines.push(raw_line.trim_end().to_string());
             }
+            protected_ranges.push((start, output_lines.len()));
             idx += 1;
             continue;
         }
@@ -425,13 +433,12 @@ pub fn format_with_config(source: &str, config: &Config, range: Option<(usize, u
                         // Directives (!$acc/!$omp/!DIR$) are never rewrapped:
                         // breaking one without its sentinel on the
                         // continuation line silently disables it.
-                        let wrapped = if config.rewrap_code.is_enabled()
-                            && kind != LineKind::Directive
-                        {
-                            rewrap_line(&formatted, config.line_length, config.indent_width)
-                        } else {
-                            vec![formatted.clone()]
-                        };
+                        let wrapped =
+                            if config.rewrap_code.is_enabled() && kind != LineKind::Directive {
+                                rewrap_line(&formatted, config.line_length, config.indent_width)
+                            } else {
+                                vec![formatted.clone()]
+                            };
                         output_lines.extend(wrapped);
                     } else if raw_idx == 0 {
                         // Check if the continuation was interrupted by a preprocessor
@@ -541,19 +548,48 @@ pub fn format_with_config(source: &str, config: &Config, range: Option<(usize, u
         idx += 1;
     }
 
-    // Strip trailing blank lines
-    while output_lines.last().is_some_and(|l| l.is_empty()) {
+    // Strip trailing blank lines (but never protected out-of-range ones)
+    while output_lines.last().is_some_and(|l| l.is_empty())
+        && !protected_ranges
+            .iter()
+            .any(|&(s, e)| s <= output_lines.len() - 1 && output_lines.len() - 1 < e)
+    {
         output_lines.pop();
     }
 
-    // Apply post-processing passes, respecting ! ffmt off/on suppression regions
+    // Apply post-processing passes, respecting ! ffmt off/on suppression
+    // regions and (in range mode) the protected out-of-range segments.
+    let protected = std::cell::RefCell::new(protected_ranges);
     let apply = |lines: Vec<String>, f: &dyn Fn(&[String]) -> Vec<String>| -> Vec<String> {
-        apply_respecting_suppression(lines, f)
+        let mut prot = protected.borrow_mut();
+        if prot.is_empty() {
+            return apply_respecting_suppression(lines, f);
+        }
+        let mut sorted: Vec<(usize, usize)> = prot.clone();
+        sorted.sort_unstable();
+        let mut out: Vec<String> = Vec::new();
+        let mut new_prot: Vec<(usize, usize)> = Vec::new();
+        let mut pos = 0usize;
+        for &(seg_s, seg_e) in &sorted {
+            if pos < seg_s {
+                out.extend(apply_respecting_suppression(lines[pos..seg_s].to_vec(), f));
+            }
+            let ns = out.len();
+            out.extend_from_slice(&lines[seg_s..seg_e]);
+            new_prot.push((ns, out.len()));
+            pos = seg_e;
+        }
+        if pos < lines.len() {
+            out.extend(apply_respecting_suppression(lines[pos..].to_vec(), f));
+        }
+        *prot = new_prot;
+        out
     };
 
     // Split semicolon-separated statements (early, before alignment)
     if config.split_statements.is_enabled() {
-        output_lines = apply(output_lines, &split_multi_statements);
+        let iw = config.indent_width;
+        output_lines = apply(output_lines, &|lines| split_multi_statements(lines, iw));
     }
 
     // Reformat use statements (one import per line)
@@ -570,6 +606,13 @@ pub fn format_with_config(source: &str, config: &Config, range: Option<(usize, u
 
     // Ensure blank lines after major block closers (before Doxygen, before end module, etc.)
     output_lines = apply(output_lines, &ensure_blank_after_end);
+
+    // Enforce :: separator BEFORE the declaration/code blank-line pass, so
+    // `integer i` is already `integer :: i` when declarations are detected
+    // (running it later made the blank appear only on the second run).
+    if config.enforce_double_colon.is_enabled() {
+        output_lines = apply(output_lines, &enforce_double_colon);
+    }
 
     // Ensure blank line between declaration block and executable code
     output_lines = apply(output_lines, &separate_declarations_from_code);
@@ -611,11 +654,6 @@ pub fn format_with_config(source: &str, config: &Config, range: Option<(usize, u
         });
     }
 
-    // Enforce :: separator in variable declarations (before alignment)
-    if config.enforce_double_colon.is_enabled() {
-        output_lines = apply(output_lines, &enforce_double_colon);
-    }
-
     // Align :: in consecutive declaration lines
     if config.align_declarations {
         let cd = config.compact_declarations.is_enabled();
@@ -627,25 +665,30 @@ pub fn format_with_config(source: &str, config: &Config, range: Option<(usize, u
     }
 
     // Ensure at least 2 spaces before inline comments (Fortitude S102)
-    output_lines = apply(output_lines, &ensure_two_spaces_before_inline_comment);
+    {
+        let ll = config.line_length;
+        output_lines = apply(output_lines, &|lines| {
+            ensure_two_spaces_before_inline_comment(lines, ll)
+        });
+    }
 
     // Strip trailing semicolons (Fortitude S081)
     output_lines = apply(output_lines, &strip_trailing_semicolons);
 
     // Collapse consecutive blank lines that may result from semicolon stripping
-    output_lines = {
-        let mut collapsed = Vec::with_capacity(output_lines.len());
+    output_lines = apply(output_lines, &|lines: &[String]| {
+        let mut collapsed = Vec::with_capacity(lines.len());
         let mut prev_blank = false;
-        for line in output_lines {
+        for line in lines {
             let is_blank = line.trim().is_empty();
             if is_blank && prev_blank {
                 continue;
             }
             prev_blank = is_blank;
-            collapsed.push(line);
+            collapsed.push(line.clone());
         }
         collapsed
-    };
+    });
 
     // Modernize legacy relational operators (.eq. -> ==, etc.)
     if config.modernize_operators.is_enabled() {
@@ -881,12 +924,54 @@ fn split_doxygen_commands(line: &str) -> Vec<String> {
     // Find @ commands in the text. Only a KNOWN doxygen command preceded by
     // whitespace counts — `bob@example.com` is text, not a command.
     const DOXYGEN_COMMANDS: &[&str] = &[
-        "param", "return", "returns", "retval", "brief", "details", "author", "authors", "date",
-        "note", "warning", "attention", "see", "sa", "ref", "todo", "bug", "deprecated", "code",
-        "endcode", "example", "file", "ingroup", "defgroup", "addtogroup", "version", "copyright",
-        "remark", "remarks", "par", "pre", "post", "throws", "exception", "tparam", "since",
-        "test", "var", "fn", "name", "mainpage", "section", "subsection", "page", "anchor",
-        "cite", "copydoc", "internal",
+        "param",
+        "return",
+        "returns",
+        "retval",
+        "brief",
+        "details",
+        "author",
+        "authors",
+        "date",
+        "note",
+        "warning",
+        "attention",
+        "see",
+        "sa",
+        "ref",
+        "todo",
+        "bug",
+        "deprecated",
+        "code",
+        "endcode",
+        "example",
+        "file",
+        "ingroup",
+        "defgroup",
+        "addtogroup",
+        "version",
+        "copyright",
+        "remark",
+        "remarks",
+        "par",
+        "pre",
+        "post",
+        "throws",
+        "exception",
+        "tparam",
+        "since",
+        "test",
+        "var",
+        "fn",
+        "name",
+        "mainpage",
+        "section",
+        "subsection",
+        "page",
+        "anchor",
+        "cite",
+        "copydoc",
+        "internal",
     ];
     let mut at_positions: Vec<usize> = Vec::new();
     let bytes = text.as_bytes();
@@ -1332,18 +1417,15 @@ fn remove_blanks_before_closers(lines: &[String]) -> Vec<String> {
         // Doxygen group opener: !> @{
         let is_doxygen_opener = trimmed_raw == "!> @{";
 
-        let is_closer = trimmed.starts_with("else")
-            || trimmed.starts_with("end ")
-            || trimmed == "end"
-            || trimmed.starts_with("case ")
-            || trimmed == "case default"
-            || trimmed.starts_with("class ")
-            || trimmed == "class default"
-            || trimmed.starts_with("type is")
-            || trimmed.starts_with("rank ")
-            || trimmed == "rank default"
-            || trimmed.starts_with("elsewhere")
-            || trimmed == "contains"
+        // Use the classifier for the Fortran constructs: naive prefix
+        // matching fired on ordinary identifiers (blocksize, critical_temp,
+        // else_branch) and class(...) declarations.
+        let fort_kind = classify(trimmed_raw);
+        let is_fort_closer = matches!(
+            fort_kind,
+            LineKind::FortranBlockClose | LineKind::FortranContinuation | LineKind::FortranContains
+        );
+        let is_closer = is_fort_closer
             || trimmed.starts_with("#:else")
             || trimmed.starts_with("#:elif")
             || trimmed.starts_with("#:endif")
@@ -1373,16 +1455,15 @@ fn remove_blanks_before_closers(lines: &[String]) -> Vec<String> {
             continue; // skip this blank line
         }
 
-        let is_opener = (trimmed.ends_with("then")
-            || (trimmed.starts_with("do ") && !trimmed.starts_with("do concurrent"))
-            || trimmed.starts_with("do concurrent")
-            || trimmed == "do"
-            || trimmed.starts_with("select case")
-            || trimmed.starts_with("select type")
-            || trimmed.starts_with("select rank")
-            || trimmed.starts_with("block")
-            || trimmed.starts_with("associate")
-            || trimmed.starts_with("critical")
+        // Only EXECUTABLE construct openers (if/do/select/block/...) remove a
+        // following blank; procedure/module/type openers keep theirs.
+        let is_exec_opener = fort_kind == LineKind::FortranBlockOpen
+            && !is_procedure_opener(trimmed_raw)
+            && !is_module_or_program(trimmed_raw)
+            && !trimmed.starts_with("type")
+            && !trimmed.starts_with("interface")
+            && !trimmed.starts_with("abstract");
+        let is_opener = (is_exec_opener
             || trimmed.starts_with("#:if ")
             || trimmed.starts_with("#:for ")
             || trimmed.starts_with("#:call ")
@@ -1392,19 +1473,11 @@ fn remove_blanks_before_closers(lines: &[String]) -> Vec<String> {
             || trimmed.starts_with("#if ")
             || is_doxygen_opener)
             // Continuations act as both closer and opener (else, case, #else, #elif, etc.)
-            || (is_closer && (trimmed.starts_with("else")
-                || trimmed.starts_with("case ")
-                || trimmed == "case default"
-                || trimmed.starts_with("class ")
-                || trimmed == "class default"
-                || trimmed.starts_with("type is")
-                || trimmed.starts_with("rank ")
-                || trimmed == "rank default"
-                || trimmed.starts_with("elsewhere")
-                || trimmed.starts_with("#else")
-                || trimmed.starts_with("#elif")
-                || trimmed.starts_with("#:else")
-                || trimmed.starts_with("#:elif")));
+            || fort_kind == LineKind::FortranContinuation
+            || trimmed.starts_with("#else")
+            || trimmed.starts_with("#elif")
+            || trimmed.starts_with("#:else")
+            || trimmed.starts_with("#:elif");
 
         prev_was_opener = is_opener;
 
@@ -1640,7 +1713,7 @@ fn is_declaration_line(line: &str) -> bool {
 /// This satisfies Fortitude rule S102. Only applies to lines that have both
 /// code and a trailing comment (not standalone comment lines, not `!$` directives,
 /// not `!>` or `!<` Doxygen, not Fypp lines).
-fn ensure_two_spaces_before_inline_comment(lines: &[String]) -> Vec<String> {
+fn ensure_two_spaces_before_inline_comment(lines: &[String], line_length: usize) -> Vec<String> {
     lines
         .iter()
         .map(|line| {
@@ -1698,7 +1771,11 @@ fn ensure_two_spaces_before_inline_comment(lines: &[String]) -> Vec<String> {
                       // Add spaces to reach 2, but only if it won't exceed line_length
                     let code_part = &line[..i].trim_end();
                     let comment_part = &line[i..];
-                    return format!("{}  {}", code_part, comment_part);
+                    let widened = format!("{}  {}", code_part, comment_part);
+                    if widened.len() > line_length && widened.len() > line.trim_end().len() {
+                        return line.clone();
+                    }
+                    return widened;
                 }
                 i += 1;
             }
@@ -2635,7 +2712,7 @@ fn enforce_double_colon(lines: &[String]) -> Vec<String> {
 
 /// Split semicolon-separated statements onto separate lines.
 /// Preserves `private; public ::` as an idiomatic Fortran pattern.
-fn split_multi_statements(lines: &[String]) -> Vec<String> {
+fn split_multi_statements(lines: &[String], indent_width: usize) -> Vec<String> {
     let mut result: Vec<String> = Vec::new();
 
     for line in lines {
@@ -2700,19 +2777,32 @@ fn split_multi_statements(lines: &[String]) -> Vec<String> {
             continue;
         }
 
-        // Split at semicolons
+        // Split at semicolons. Pieces are re-indented relative to the parent
+        // line by classifying each one: an opener indents what follows it,
+        // a closer/continuation dedents itself (if (...) then; x = 1; end if).
+        let mut pieces: Vec<&str> = Vec::new();
         let mut start = 0;
         for &semi_pos in &semicolons {
-            let stmt = trimmed[start..semi_pos].trim();
-            if !stmt.is_empty() {
-                result.push(format!("{}{}", indent_str, stmt));
-            }
+            pieces.push(trimmed[start..semi_pos].trim());
             start = semi_pos + 1;
         }
-        // Remaining after last semicolon
-        let remainder = trimmed[start..].trim();
-        if !remainder.is_empty() {
-            result.push(format!("{}{}", indent_str, remainder));
+        pieces.push(trimmed[start..].trim());
+
+        let _ = indent_str;
+        let mut depth = 0i32;
+        for stmt in pieces.into_iter().filter(|s| !s.is_empty()) {
+            let kind = classify(stmt);
+            let piece_depth = match kind {
+                LineKind::FortranBlockClose | LineKind::FortranContinuation => depth - 1,
+                _ => depth,
+            };
+            let piece_indent = (indent as i32 + piece_depth * indent_width as i32).max(0) as usize;
+            result.push(format!("{}{}", " ".repeat(piece_indent), stmt));
+            match kind {
+                LineKind::FortranBlockOpen => depth += 1,
+                LineKind::FortranBlockClose => depth -= 1,
+                _ => {}
+            }
         }
     }
 
@@ -2767,19 +2857,37 @@ fn align_assignments(lines: &[String], max_length: usize) -> Vec<String> {
     let mut i = 0;
 
     while i < lines.len() {
-        // Try to start a group of consecutive assignment lines
+        // Try to start a group of consecutive assignment lines at the SAME
+        // indentation. Control statements that happen to contain `=` at
+        // depth 0 (do-loop control, where one-liners) are not assignments.
         let group_start = i;
         let mut group: Vec<usize> = Vec::new(); // indices into lines
         let mut eq_columns: Vec<usize> = Vec::new(); // column of `=` in each line
+        let mut group_indent: Option<usize> = None;
 
         while i < lines.len() {
-            if let Some(eq_col) = find_assignment_eq(&lines[i]) {
-                group.push(i);
-                eq_columns.push(eq_col);
-                i += 1;
-            } else {
-                break;
+            let first_word: String = lines[i]
+                .trim_start()
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                .collect::<String>()
+                .to_ascii_lowercase();
+            let is_control = matches!(
+                first_word.as_str(),
+                "do" | "if" | "where" | "forall" | "while" | "else" | "elseif" | "case" | "select"
+            );
+            let indent = leading_spaces(&lines[i]);
+            let same_indent = group_indent.is_none_or(|gi| gi == indent);
+            if !is_control && same_indent {
+                if let Some(eq_col) = find_assignment_eq(&lines[i]) {
+                    group.push(i);
+                    eq_columns.push(eq_col);
+                    group_indent = Some(indent);
+                    i += 1;
+                    continue;
+                }
             }
+            break;
         }
 
         if group.len() < 2 {
@@ -2890,8 +2998,13 @@ fn find_assignment_eq(line: &str) -> Option<usize> {
             // Check it's not ==, /=, <=, >=, =>
             let prev = if i > 0 { bytes[i - 1] } else { b' ' };
             let next = if i + 1 < len { bytes[i + 1] } else { b' ' };
-            if next == b'=' || next == b'>' || prev == b'/' || prev == b'<' || prev == b'>'
-                || prev == b'=' || prev == b'!'
+            if next == b'='
+                || next == b'>'
+                || prev == b'/'
+                || prev == b'<'
+                || prev == b'>'
+                || prev == b'='
+                || prev == b'!'
             {
                 i += 1;
                 continue;
@@ -2922,8 +3035,15 @@ fn reformat_use_statements(lines: &[String], indent_width: usize) -> Vec<String>
             continue;
         }
 
-        // Check for `only:`
-        let only_pos = match lower.find("only:") {
+        // Split off any trailing comment FIRST: `only:` inside a comment is
+        // text, and the comment must survive the reformatting.
+        let (code_part, comment_part) = split_trailing_comment(trimmed);
+        let code_part = code_part.trim_end();
+        let comment_part = comment_part.trim_end();
+        let code_lower = code_part.to_ascii_lowercase();
+
+        // Check for `only:` in the CODE part only
+        let only_pos = match code_lower.find("only:") {
             Some(pos) => pos,
             None => {
                 result.push(line.clone());
@@ -2931,52 +3051,19 @@ fn reformat_use_statements(lines: &[String], indent_width: usize) -> Vec<String>
             }
         };
 
+        // Handle single-line use statements only
+        if code_part.ends_with('&') {
+            result.push(line.clone());
+            continue;
+        }
+
         let indent = leading_spaces(line);
         let indent_str = " ".repeat(indent);
         let cont_indent = " ".repeat(indent + indent_width);
 
         // Extract part before `only:` and the import list after it
-        let before_only = &trimmed[..only_pos + 5]; // includes "only:"
-        let imports_str = trimmed[only_pos + 5..].trim();
-
-        // Remove trailing comment if present
-        let (imports_str, _trailing_comment) = {
-            let bytes = imports_str.as_bytes();
-            let mut in_str = false;
-            let mut qch = b' ';
-            let mut comment_pos = None;
-            for i in 0..bytes.len() {
-                if in_str {
-                    if bytes[i] == qch {
-                        if i + 1 < bytes.len() && bytes[i + 1] == qch {
-                            continue;
-                        }
-                        in_str = false;
-                    }
-                    continue;
-                }
-                if bytes[i] == b'\'' || bytes[i] == b'"' {
-                    in_str = true;
-                    qch = bytes[i];
-                    continue;
-                }
-                if bytes[i] == b'!' {
-                    comment_pos = Some(i);
-                    break;
-                }
-            }
-            match comment_pos {
-                Some(pos) => (imports_str[..pos].trim(), Some(imports_str[pos..].trim())),
-                None => (imports_str, None),
-            }
-        };
-
-        // Also handle continuation lines: if line ends with &, collect continuations
-        // For simplicity, handle single-line use statements only
-        if line.trim_end().ends_with('&') {
-            result.push(line.clone());
-            continue;
-        }
+        let before_only = &code_part[..only_pos + 5]; // includes "only:"
+        let imports_str = code_part[only_pos + 5..].trim();
 
         // Parse comma-separated imports
         let imports: Vec<&str> = imports_str
@@ -2990,13 +3077,16 @@ fn reformat_use_statements(lines: &[String], indent_width: usize) -> Vec<String>
             continue;
         }
 
-        // Emit reformatted: one import per line
+        // Emit reformatted: one import per line; a trailing comment is
+        // reattached to the final line.
         result.push(format!("{}{} &", indent_str, before_only));
         for (idx, import) in imports.iter().enumerate() {
             if idx < imports.len() - 1 {
                 result.push(format!("{}& {}, &", cont_indent, import));
-            } else {
+            } else if comment_part.is_empty() {
                 result.push(format!("{}& {}", cont_indent, import));
+            } else {
+                result.push(format!("{}& {}  {}", cont_indent, import, comment_part));
             }
         }
     }

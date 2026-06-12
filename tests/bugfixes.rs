@@ -416,7 +416,10 @@ fn test_split_trailing_comment_escaped_quote_long_line() {
         "program t\n    call some_subroutine_name(argument_one, argument_two, argument_three, {lit}, argument_four)\nend program t\n"
     );
     let out = ffmt::format_string(&src);
-    let rejoined = out.replace(" &\n", " ").replace("\n", " ").replace("& ", "");
+    let rejoined = out
+        .replace(" &\n", " ")
+        .replace("\n", " ")
+        .replace("& ", "");
     assert!(
         rejoined.contains("it''s ! not a comment padding"),
         "string literal split at interior '!':\n{out}"
@@ -445,7 +448,10 @@ fn test_rewrap_paren_align_ignores_paren_in_escaped_string() {
     let lit = "'aa''bb (cc dd ee ff gg hh ii jj kk ll mm nn oo pp qq rr ss tt uu vv ww xx yy zz'";
     let src = format!("program t\n    result_variable_name = {lit}//suffix_variable//another_suffix_variable//yet_another_one\nend program t\n");
     let out = ffmt::format_string(&src);
-    let rejoined = out.replace(" &\n", " ").replace("\n", " ").replace("& ", "");
+    let rejoined = out
+        .replace(" &\n", " ")
+        .replace("\n", " ")
+        .replace("& ", "");
     assert!(
         rejoined.contains("aa''bb (cc"),
         "string literal damaged by rewrap:\n{out}"
@@ -461,10 +467,7 @@ fn test_long_acc_directive_not_rewrapped() {
     let dir = "!$acc parallel loop gang vector collapse(3) default(present) private(alpha_rho_k, alpha_k, velocity_components) reduction(+:total_energy_sum) copyin(boundary_conditions)";
     let src = format!("program t\n    {dir}\n    x = 1\nend program t\n");
     let out = ffmt::format_string(&src);
-    assert!(
-        out.contains(dir),
-        "directive was altered/rewrapped:\n{out}"
-    );
+    assert!(out.contains(dir), "directive was altered/rewrapped:\n{out}");
 }
 
 #[test]
@@ -536,10 +539,171 @@ fn test_unicode_to_ascii_applies_to_inline_comments() {
         unicode_to_ascii: true,
         ..ffmt::Config::default()
     };
-    let src = "program t\n    x = 1  ! \u{2014} em\u{2013}dash \u{201c}quoted\u{201d}\nend program t\n";
+    let src =
+        "program t\n    x = 1  ! \u{2014} em\u{2013}dash \u{201c}quoted\u{201d}\nend program t\n";
     let out = ffmt::format_string_with_config(src, &config);
     assert!(
         !out.contains('\u{2014}') && !out.contains('\u{201c}'),
         "unicode left in inline comment:\n{out}"
+    );
+}
+
+// --- Alignment / blank-line post-passes ---
+
+#[test]
+fn test_blanks_kept_around_keyword_prefixed_identifiers() {
+    // blocksize/critical_temp/else_branch are ordinary variables; the
+    // blank-line management around openers/closers must not fire on them.
+    let src = "\
+program t
+    integer :: a
+
+    blocksize = 1
+
+    critical_temp = 2.0
+
+    else_branch = 3
+
+    a = blocksize
+end program t
+";
+    let out = ffmt::format_string(src);
+    assert_eq!(
+        out.matches("\n\n").count(),
+        5,
+        "blank lines were added/removed around ordinary statements:\n{out}"
+    );
+}
+
+#[test]
+fn test_class_default_still_treated_as_closer() {
+    // The classifier-driven closer detection must still remove the blank
+    // before select-type continuations like `class default`.
+    let src = "\
+subroutine s(v)
+    select type (v)
+    type is (integer)
+        i = 1
+
+    class default
+        i = 2
+    end select
+end subroutine s
+";
+    let out = ffmt::format_string(src);
+    assert!(
+        !out.contains("\n\n    class default"),
+        "blank before class default not removed:\n{out}"
+    );
+}
+
+#[test]
+fn test_align_assignments_skips_do_control_and_indent_groups() {
+    let config = ffmt::Config {
+        align_assignments: ffmt::config::Toggle::Enable,
+        ..ffmt::Config::default()
+    };
+    let src = "program t\n    do i = 1, n\n        x = 1\n        long_name = 2\n    end do\nend program t\n";
+    let out = ffmt::format_string_with_config(src, &config);
+    assert!(
+        out.contains("do i = 1, n"),
+        "do-loop control '=' was aligned:\n{out}"
+    );
+    assert!(
+        out.contains("x         = 1"),
+        "body assignments not aligned together:\n{out}"
+    );
+}
+
+#[test]
+fn test_two_space_comment_respects_line_length() {
+    // "    " + name + " = 1 " + "! c" with name of 120 chars == exactly 132.
+    let long_name = "y".repeat(120);
+    let src = format!("program t\n    {long_name} = 1 ! c\nend program t\n");
+    let line_len_before = src.lines().nth(1).unwrap().len();
+    assert_eq!(line_len_before, 132);
+    let out = ffmt::format_string(&src);
+    let line = out.lines().find(|l| l.contains("! c")).unwrap();
+    assert!(
+        line.len() <= 132,
+        "two-space pass pushed line to {} chars:\n{line}",
+        line.len()
+    );
+}
+
+// --- use-statement reformatting, split-statements, range containment ---
+
+#[test]
+fn test_use_reformat_preserves_trailing_comment() {
+    let config = ffmt::Config {
+        use_formatting: ffmt::config::Toggle::Enable,
+        ..ffmt::Config::default()
+    };
+    let src = "module m\n    use other, only: a, b ! important comment\nend module m\n";
+    let out = ffmt::format_string_with_config(src, &config);
+    assert!(
+        out.contains("important comment"),
+        "trailing comment deleted by use reformatting:\n{out}"
+    );
+}
+
+#[test]
+fn test_use_reformat_ignores_only_inside_comment() {
+    let config = ffmt::Config {
+        use_formatting: ffmt::config::Toggle::Enable,
+        ..ffmt::Config::default()
+    };
+    let src = "module m\n    use other ! only: a, b\nend module m\n";
+    let out = ffmt::format_string_with_config(src, &config);
+    assert!(
+        !out.contains("&"),
+        "use line exploded from comment text:\n{out}"
+    );
+    assert!(out.contains("! only: a, b"), "comment lost:\n{out}");
+}
+
+#[test]
+fn test_double_colon_then_declaration_blank_idempotent() {
+    let src = "subroutine s\n    integer i\n    i = 1\nend subroutine s\n";
+    let once = ffmt::format_string(src);
+    let twice = ffmt::format_string(&once);
+    assert_eq!(
+        once, twice,
+        "pass ordering non-idempotent:\nonce:\n{once}\ntwice:\n{twice}"
+    );
+}
+
+#[test]
+fn test_split_statements_reindents_and_is_idempotent() {
+    let config = ffmt::Config {
+        split_statements: ffmt::config::Toggle::Enable,
+        ..ffmt::Config::default()
+    };
+    let src = "program t\nif (a) then; b = 1; end if\nend program t\n";
+    let once = ffmt::format_string_with_config(src, &config);
+    assert!(
+        once.contains("if (a) then\n        b = 1\n    end if"),
+        "split statements not re-indented:\n{once}"
+    );
+    let twice = ffmt::format_string_with_config(&once, &config);
+    assert_eq!(once, twice, "split-statements not idempotent");
+}
+
+#[test]
+fn test_range_format_leaves_outside_lines_untouched() {
+    let src = "if (a.eq.b) x=1\ny=2\nz=3\n";
+    let out = ffmt::format_range(src, 3, 3);
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(
+        lines[0], "if (a.eq.b) x=1",
+        "line 1 outside range was rewritten:\n{out}"
+    );
+    assert_eq!(
+        lines[1], "y=2",
+        "line 2 outside range was rewritten:\n{out}"
+    );
+    assert_eq!(
+        lines[2], "z = 3",
+        "line 3 inside range not formatted:\n{out}"
     );
 }
