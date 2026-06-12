@@ -190,12 +190,17 @@ pub fn run() {
         .build_global()
         .ok();
 
-    // Load cache
+    // Load cache. The salt ties entries to this ffmt version and the root
+    // config: a cache written by a different version (or after a config
+    // change) is discarded wholesale — stale entries would silently freeze
+    // files in their old formatting.
+    let cache_salt = hash_bytes(env!("CARGO_PKG_VERSION").as_bytes())
+        ^ hash_bytes(format!("{:?}", config).as_bytes());
     let cache_dir = args.cache_dir.as_deref().unwrap_or(CACHE_DIR);
     let mut cache = if args.no_cache || args.check {
         None
     } else {
-        Some(FileCache::load(cache_dir))
+        Some(FileCache::load(cache_dir, cache_salt))
     };
 
     // Filter files that haven't changed since last format
@@ -567,15 +572,28 @@ fn print_diff(path: &Path, original: &str, formatted: &str, color: bool) {
 
 struct FileCache {
     entries: HashMap<PathBuf, u64>,
+    salt: u64,
 }
 
 impl FileCache {
-    fn load(cache_dir: &str) -> Self {
+    fn load(cache_dir: &str, salt: u64) -> Self {
         let cache_file = Path::new(cache_dir).join("hashes");
         let mut entries = HashMap::new();
 
         if let Ok(content) = fs::read_to_string(&cache_file) {
-            for line in content.lines() {
+            let mut lines = content.lines();
+            // Header: "# <salt>". A missing or mismatched header means the
+            // cache was written by another ffmt version or under a different
+            // config — discard it.
+            let valid = lines
+                .next()
+                .and_then(|h| h.strip_prefix("# "))
+                .and_then(|v| v.parse::<u64>().ok())
+                == Some(salt);
+            if !valid {
+                return FileCache { entries, salt };
+            }
+            for line in lines {
                 let mut parts = line.splitn(2, ' ');
                 if let (Some(hash_str), Some(path_str)) = (parts.next(), parts.next()) {
                     if let Ok(hash) = hash_str.parse::<u64>() {
@@ -585,7 +603,7 @@ impl FileCache {
             }
         }
 
-        FileCache { entries }
+        FileCache { entries, salt }
     }
 
     fn is_cached(&self, path: &Path) -> bool {
@@ -618,7 +636,7 @@ impl FileCache {
             .collect();
         lines.sort();
 
-        let content = lines.join("\n") + "\n";
+        let content = format!("# {}\n{}\n", self.salt, lines.join("\n"));
         let _ = fs::write(cache_file, content);
     }
 }

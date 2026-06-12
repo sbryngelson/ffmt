@@ -73,10 +73,7 @@ fn normalize_code_keywords(code: &str) -> String {
         vec![
             // end* compounds — capture both parts to preserve case:
             // "ENDDO" → "END DO", "EndDo" → "End Do", "enddo" → "end do"
-            (
-                Regex::new(r"(?i)\b(end)(do|if|select|subroutine|function|module|submodule|program|interface|type|block|associate|where|forall|enum|critical|team)\b").unwrap(),
-                "$1 $2",
-            ),
+
             // else if — normalize spacing (but NOT elsewhere, which is a single keyword)
             (Regex::new(r"(?i)\b(else)\s*(if)\b").unwrap(), "$1 $2"),
             (Regex::new(r"(?i)\b(select)\s*(case)\b").unwrap(), "$1 $2"),
@@ -132,6 +129,36 @@ fn normalize_code_keywords(code: &str) -> String {
                 i += 1;
             }
             let mut segment = code[start..i].to_string();
+            // end* compounds — applied with a suffix check: `endif = 3` is
+            // an assignment to a variable named endif, not a block close.
+            static END_RE: OnceLock<Regex> = OnceLock::new();
+            let end_re = END_RE.get_or_init(|| {
+                Regex::new(r"(?i)\b(end)(do|if|select|subroutine|function|module|submodule|program|interface|type|block|associate|where|forall|enum|critical|team)\b").unwrap()
+            });
+            segment = {
+                let src = segment.as_str();
+                end_re
+                    .replace_all(src, |caps: &regex::Captures| {
+                        let m = caps.get(0).unwrap();
+                        // A block close starts the statement (possibly after
+                        // a numeric label or `;`). Anywhere else — after
+                        // `::`, in an expression, as an array reference —
+                        // the word is an identifier.
+                        let pre = src[..m.start()].trim();
+                        let at_stmt_start = pre.is_empty()
+                            || pre.ends_with(';')
+                            || pre.chars().all(|c| c.is_ascii_digit());
+                        let rest = src[m.end()..].trim_start();
+                        let used_as_variable =
+                            rest.starts_with('=') || rest.starts_with('(') || rest.starts_with('%');
+                        if at_stmt_start && !used_as_variable {
+                            format!("{} {}", &caps[1], &caps[2])
+                        } else {
+                            m.as_str().to_string()
+                        }
+                    })
+                    .into_owned()
+            };
             for (re, replacement) in patterns {
                 segment = re.replace_all(&segment, *replacement).to_string();
             }

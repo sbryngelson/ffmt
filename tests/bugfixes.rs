@@ -616,18 +616,17 @@ fn test_align_assignments_skips_do_control_and_indent_groups() {
 }
 
 #[test]
-fn test_two_space_comment_respects_line_length() {
-    // "    " + name + " = 1 " + "! c" with name of 120 chars == exactly 132.
+fn test_two_space_comment_stable_at_line_limit() {
+    // S102 wins over line length at the boundary; what matters is that the
+    // result is STABLE (no flip-flop between one and two spaces across runs).
     let long_name = "y".repeat(120);
     let src = format!("program t\n    {long_name} = 1 ! c\nend program t\n");
-    let line_len_before = src.lines().nth(1).unwrap().len();
-    assert_eq!(line_len_before, 132);
-    let out = ffmt::format_string(&src);
-    let line = out.lines().find(|l| l.contains("! c")).unwrap();
+    let once = ffmt::format_string(&src);
+    let twice = ffmt::format_string(&once);
+    assert_eq!(once, twice, "comment spacing flip-flops at the line limit");
     assert!(
-        line.len() <= 132,
-        "two-space pass pushed line to {} chars:\n{line}",
-        line.len()
+        once.contains("1  ! c"),
+        "S102 two-space rule not applied:\n{once}"
     );
 }
 
@@ -705,5 +704,25 @@ fn test_range_format_leaves_outside_lines_untouched() {
     assert_eq!(
         lines[2], "z = 3",
         "line 3 inside range not formatted:\n{out}"
+    );
+}
+
+// --- keyword-case = "upper" was a silent no-op ---
+
+#[test]
+fn test_keyword_case_upper_works() {
+    let config = ffmt::Config {
+        keyword_case: ffmt::config::KeywordCase::Upper,
+        ..ffmt::Config::default()
+    };
+    let src = "program t\n    integer :: i\n    if (x .and. y) then\n        i = 1\n    end if\nend program t\n";
+    let out = ffmt::format_string_with_config(src, &config);
+    assert!(out.contains("PROGRAM t"), "keywords not uppercased:\n{out}");
+    assert!(out.contains("INTEGER :: i"), "{out}");
+    assert!(out.contains(".AND."), "{out}");
+    assert!(out.contains("END IF"), "{out}");
+    assert!(
+        !out.contains("END PROGRAM T"),
+        "identifier was uppercased:\n{out}"
     );
 }

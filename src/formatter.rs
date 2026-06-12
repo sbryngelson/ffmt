@@ -552,7 +552,7 @@ pub fn format_with_config(source: &str, config: &Config, range: Option<(usize, u
     while output_lines.last().is_some_and(|l| l.is_empty())
         && !protected_ranges
             .iter()
-            .any(|&(s, e)| s <= output_lines.len() - 1 && output_lines.len() - 1 < e)
+            .any(|&(s, e)| s < output_lines.len() && output_lines.len() - 1 < e)
     {
         output_lines.pop();
     }
@@ -899,9 +899,7 @@ fn leading_spaces(s: &str) -> usize {
 }
 
 /// Uppercase Fortran keywords (inverse of normalize_case).
-fn normalize_case_upper(line: &str) -> String {
-    line.to_string()
-}
+use crate::case_norm::normalize_case_upper;
 
 /// Split a Doxygen comment line that has multiple @ commands into separate lines.
 /// E.g., `!> @file @brief Foo` → [`!> @file`, `!! @brief Foo`]
@@ -1768,14 +1766,15 @@ fn ensure_two_spaces_before_inline_comment(lines: &[String], line_length: usize)
                     if spaces >= 2 {
                         return line.clone();
                     } // already ok
-                      // Add spaces to reach 2, but only if it won't exceed line_length
+                      // S102 (two spaces before inline comments) wins over
+                      // line length: collapse_double_spaces narrows these
+                      // junctions earlier in the pipeline, and refusing to
+                      // re-widen here would flip-flop between runs on lines
+                      // near the limit.
+                    let _ = line_length;
                     let code_part = &line[..i].trim_end();
                     let comment_part = &line[i..];
-                    let widened = format!("{}  {}", code_part, comment_part);
-                    if widened.len() > line_length && widened.len() > line.trim_end().len() {
-                        return line.clone();
-                    }
-                    return widened;
+                    return format!("{}  {}", code_part, comment_part);
                 }
                 i += 1;
             }

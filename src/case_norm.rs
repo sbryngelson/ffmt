@@ -8,6 +8,15 @@
 ///   lowercased in non-opaque regions.
 /// - All other text (identifiers, numbers, punctuation) is preserved.
 pub fn normalize_case(line: &str) -> String {
+    normalize_case_with(line, false)
+}
+
+/// Normalize case of Fortran keywords to UPPERCASE (keyword-case = "upper").
+pub fn normalize_case_upper(line: &str) -> String {
+    normalize_case_with(line, true)
+}
+
+fn normalize_case_with(line: &str, upper: bool) -> String {
     let trimmed = line.trim_start();
 
     // If the line is a Fypp directive, return unchanged.
@@ -107,9 +116,13 @@ pub fn normalize_case(line: &str) -> String {
         // --- Dot operators: .TRUE., .AND., etc. ---
         if ch == b'.' && i + 2 < len {
             if let Some((dot_end, _)) = crate::match_dot_token(bytes, i) {
-                // Lowercase the entire dot keyword/operator token
+                // Normalize the entire dot keyword/operator token
                 let op_str = &line[i..dot_end];
-                out.push_str(&op_str.to_ascii_lowercase());
+                if upper {
+                    out.push_str(&op_str.to_ascii_uppercase());
+                } else {
+                    out.push_str(&op_str.to_ascii_lowercase());
+                }
                 i = dot_end;
                 continue;
             }
@@ -123,7 +136,11 @@ pub fn normalize_case(line: &str) -> String {
             }
             let word = &line[start..i];
             if is_keyword(word) {
-                out.push_str(&word.to_ascii_lowercase());
+                if upper {
+                    out.push_str(&word.to_ascii_uppercase());
+                } else {
+                    out.push_str(&word.to_ascii_lowercase());
+                }
             } else {
                 out.push_str(word);
             }
