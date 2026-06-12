@@ -6,6 +6,7 @@ use std::fs;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process;
+use std::sync::{Arc, Mutex};
 
 /// Default cache directory (relative to cwd).
 const CACHE_DIR: &str = ".ffmt_cache";
@@ -135,7 +136,9 @@ pub fn run() {
 
     let color = use_color(&args.color);
 
-    // Load config from ffmt.toml or pyproject.toml
+    // Load the root config from ffmt.toml or pyproject.toml (used for
+    // --dump-config, stdin mode, and file discovery). Each discovered file is
+    // later formatted with the config nearest to it (see ConfigCache).
     let config = {
         let search_dir = if !args.paths.is_empty() && args.paths[0] != "-" {
             let p = PathBuf::from(&args.paths[0]);
@@ -147,7 +150,10 @@ pub fn run() {
         } else {
             std::env::current_dir().unwrap_or_default()
         };
-        crate::config::Config::find_and_load(&search_dir)
+        crate::config::Config::try_find_and_load(&search_dir).unwrap_or_else(|e| {
+            eprintln!("ffmt: {e}");
+            process::exit(2);
+        })
     };
 
     // Dump config mode
@@ -210,9 +216,13 @@ pub fn run() {
         verbose,
     };
 
+    // Config is documented as "searched upward from the formatted file's
+    // directory", so resolve it per file (cached per directory; the cache is
+    // shared across rayon workers).
+    let config_cache = ConfigCache::default();
     let outcomes: Vec<(&PathBuf, Outcome)> = files_to_process
         .par_iter()
-        .map(|path| (*path, process_file(path, &opts, &config)))
+        .map(|path| (*path, process_file(path, &opts, &config_cache)))
         .collect();
     let any_changed = outcomes.iter().any(|(_, o)| *o == Outcome::Changed);
     let any_failed = outcomes.iter().any(|(_, o)| *o == Outcome::Failed);
@@ -371,6 +381,35 @@ struct ProcessOptions {
     verbose: bool,
 }
 
+/// Per-directory cache of resolved configs, shared across rayon workers.
+///
+/// Config discovery is documented as "searched upward from the formatted
+/// file's directory", so each file gets the config nearest to it. Errors
+/// (e.g. an unknown key in ffmt.toml) are cached too, so they are reported
+/// once per directory instead of once per file.
+#[derive(Default)]
+struct ConfigCache {
+    entries: Mutex<HashMap<PathBuf, Result<Arc<crate::config::Config>, String>>>,
+}
+
+impl ConfigCache {
+    fn for_file(&self, path: &Path) -> Result<Arc<crate::config::Config>, String> {
+        let dir = path
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| PathBuf::from("."));
+        // Canonicalize so the upward search works for relative paths and the
+        // cache keys are stable.
+        let dir = dir.canonicalize().unwrap_or(dir);
+        let mut entries = self.entries.lock().unwrap();
+        entries
+            .entry(dir.clone())
+            .or_insert_with(|| crate::config::Config::try_find_and_load(&dir).map(Arc::new))
+            .clone()
+    }
+}
+
 /// Result of processing one file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Outcome {
@@ -379,7 +418,15 @@ enum Outcome {
     Failed,
 }
 
-fn process_file(path: &Path, opts: &ProcessOptions, config: &crate::config::Config) -> Outcome {
+fn process_file(path: &Path, opts: &ProcessOptions, config_cache: &ConfigCache) -> Outcome {
+    let config = match config_cache.for_file(path) {
+        Ok(config) => config,
+        Err(e) => {
+            eprintln!("ffmt: {e}");
+            return Outcome::Failed;
+        }
+    };
+
     let source = match fs::read_to_string(path) {
         Ok(s) => s,
         Err(e) if e.kind() == io::ErrorKind::InvalidData => {
@@ -396,7 +443,7 @@ fn process_file(path: &Path, opts: &ProcessOptions, config: &crate::config::Conf
         eprintln!("ffmt: formatting {}", path.display());
     }
 
-    let formatted = crate::formatter::format_with_config(&source, config, opts.range);
+    let formatted = crate::formatter::format_with_config(&source, &config, opts.range);
 
     if formatted == source {
         return Outcome::Unchanged;
@@ -420,6 +467,17 @@ fn process_file(path: &Path, opts: &ProcessOptions, config: &crate::config::Conf
     Outcome::Changed
 }
 
+/// Split into lines on `\n` only, keeping any `\r` as part of the line so
+/// CRLF -> LF normalization shows up in the diff. A trailing newline does not
+/// produce a final empty line.
+fn split_diff_lines(s: &str) -> Vec<&str> {
+    let mut lines: Vec<&str> = s.split('\n').collect();
+    if lines.last() == Some(&"") {
+        lines.pop();
+    }
+    lines
+}
+
 fn print_diff(path: &Path, original: &str, formatted: &str, color: bool) {
     let (red, green, cyan, reset) = if color {
         ("\x1b[31m", "\x1b[32m", "\x1b[36m", "\x1b[0m")
@@ -430,46 +488,75 @@ fn print_diff(path: &Path, original: &str, formatted: &str, color: bool) {
     println!("{red}--- {}{reset}", path.display());
     println!("{green}+++ {}{reset}", path.display());
 
-    let orig_lines: Vec<&str> = original.lines().collect();
-    let fmt_lines: Vec<&str> = formatted.lines().collect();
+    let orig_lines = split_diff_lines(original);
+    let fmt_lines = split_diff_lines(formatted);
+    let orig_missing_nl = !original.is_empty() && !original.ends_with('\n');
+    let fmt_missing_nl = !formatted.is_empty() && !formatted.ends_with('\n');
     let max = orig_lines.len().max(fmt_lines.len());
 
+    let print_hunk = |hunk_start: usize, hunk_end: usize| {
+        let old_count = hunk_end.min(orig_lines.len()).saturating_sub(hunk_start);
+        let new_count = hunk_end.min(fmt_lines.len()).saturating_sub(hunk_start);
+        // Unified diff format: a zero-length range names the line *before*
+        // the hunk, so its 1-based start is hunk_start (not hunk_start + 1).
+        let old_start = if old_count == 0 {
+            hunk_start
+        } else {
+            hunk_start + 1
+        };
+        let new_start = if new_count == 0 {
+            hunk_start
+        } else {
+            hunk_start + 1
+        };
+        println!("{cyan}@@ -{old_start},{old_count} +{new_start},{new_count} @@{reset}");
+        for (j, line) in orig_lines
+            .iter()
+            .enumerate()
+            .take(hunk_start + old_count)
+            .skip(hunk_start)
+        {
+            println!("{red}-{line}{reset}");
+            if j + 1 == orig_lines.len() && orig_missing_nl {
+                println!("\\ No newline at end of file");
+            }
+        }
+        for (j, line) in fmt_lines
+            .iter()
+            .enumerate()
+            .take(hunk_start + new_count)
+            .skip(hunk_start)
+        {
+            println!("{green}+{line}{reset}");
+            if j + 1 == fmt_lines.len() && fmt_missing_nl {
+                println!("\\ No newline at end of file");
+            }
+        }
+    };
+
+    let mut printed_any = false;
     let mut i = 0;
     while i < max {
-        let orig = orig_lines.get(i).copied().unwrap_or("");
-        let fmt = fmt_lines.get(i).copied().unwrap_or("");
+        let orig = orig_lines.get(i);
+        let fmt = fmt_lines.get(i);
         if orig != fmt {
             let hunk_start = i;
-            let mut hunk_end = i;
-            while hunk_end < max {
-                let o = orig_lines.get(hunk_end).copied().unwrap_or("");
-                let f = fmt_lines.get(hunk_end).copied().unwrap_or("");
-                if o == f && hunk_end > i {
-                    break;
-                }
+            let mut hunk_end = i + 1;
+            while hunk_end < max && orig_lines.get(hunk_end) != fmt_lines.get(hunk_end) {
                 hunk_end += 1;
             }
-            println!(
-                "{cyan}@@ -{},{} +{},{} @@{reset}",
-                hunk_start + 1,
-                hunk_end - hunk_start,
-                hunk_start + 1,
-                hunk_end - hunk_start
-            );
-            for j in hunk_start..hunk_end {
-                if j < orig_lines.len() {
-                    println!("{red}-{}{reset}", orig_lines[j]);
-                }
-            }
-            for j in hunk_start..hunk_end {
-                if j < fmt_lines.len() {
-                    println!("{green}+{}{reset}", fmt_lines[j]);
-                }
-            }
+            print_hunk(hunk_start, hunk_end);
+            printed_any = true;
             i = hunk_end;
         } else {
             i += 1;
         }
+    }
+
+    // All lines compare equal but the contents differ: only the presence of
+    // the trailing newline changed. Emit a hunk replacing the last line.
+    if !printed_any && original != formatted && !orig_lines.is_empty() {
+        print_hunk(orig_lines.len() - 1, orig_lines.len());
     }
 }
 

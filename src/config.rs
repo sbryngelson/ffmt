@@ -284,19 +284,25 @@ struct PyprojectTool {
 
 impl Config {
     /// Search upward from `start_dir` for `ffmt.toml` or `pyproject.toml`
-    /// with `[tool.ffmt]`. Returns default config if nothing found.
-    pub fn find_and_load(start_dir: &Path) -> Self {
-        if let Some(path) = find_config_file(start_dir) {
-            match load_config_file(&path) {
-                Ok(cfg) => cfg,
-                Err(e) => {
-                    eprintln!("ffmt: warning: error reading {}: {e}", path.display());
-                    Config::default()
-                }
-            }
-        } else {
-            Config::default()
+    /// with `[tool.ffmt]`. Returns the default config if nothing is found,
+    /// and an error if a config file exists but cannot be read or parsed
+    /// (including unknown keys). Used by the CLI, where silently formatting
+    /// with defaults instead of the project config would be dangerous.
+    pub fn try_find_and_load(start_dir: &Path) -> Result<Self, String> {
+        match find_config_file(start_dir) {
+            Some(path) => load_config_file(&path),
+            None => Ok(Config::default()),
         }
+    }
+
+    /// Lenient variant of [`Config::try_find_and_load`]: on error, log a
+    /// warning to stderr and fall back to the default config. Used by the
+    /// LSP server, which must keep serving requests.
+    pub fn find_and_load(start_dir: &Path) -> Self {
+        Self::try_find_and_load(start_dir).unwrap_or_else(|e| {
+            eprintln!("ffmt: warning: {e}; using default config");
+            Config::default()
+        })
     }
 
     /// Load from a specific config file path.
