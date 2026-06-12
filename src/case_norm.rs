@@ -130,7 +130,18 @@ pub fn normalize_case(line: &str) -> String {
             continue;
         }
 
-        // --- Everything else: pass through unchanged ---
+        // --- Non-ASCII: copy the whole UTF-8 character unchanged ---
+        // (`ch as char` would reinterpret each byte as Latin-1, mojibaking
+        // multi-byte sequences.)
+        if ch >= 0x80 {
+            if let Some(c) = line[i..].chars().next() {
+                out.push(c);
+                i += c.len_utf8();
+                continue;
+            }
+        }
+
+        // --- Everything else (ASCII): pass through unchanged ---
         out.push(ch as char);
         i += 1;
     }
