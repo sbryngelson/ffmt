@@ -209,14 +209,26 @@ fn handle_message(
                 .as_u64()
                 .unwrap_or(0) as usize;
             let end_line = msg["params"]["range"]["end"]["line"].as_u64().unwrap_or(0) as usize;
+            let end_char = msg["params"]["range"]["end"]["character"]
+                .as_u64()
+                .unwrap_or(0) as usize;
+
+            // LSP lines are 0-based and the end position is EXCLUSIVE: an end
+            // at character 0 of line N means line N itself is not selected.
+            // ffmt's range is 1-based inclusive, so that case maps to
+            // end_line (not end_line + 1).
+            let end_line_inclusive = if end_char == 0 && end_line > start_line {
+                end_line
+            } else {
+                end_line + 1
+            };
 
             if let Some(text) = documents.get(uri) {
-                // LSP lines are 0-based, ffmt range is 1-based
                 let config = config_for_uri(uri, config);
                 let formatted = crate::formatter::format_with_config(
                     text,
                     &config,
-                    Some((start_line + 1, end_line + 1)),
+                    Some((start_line + 1, end_line_inclusive)),
                 );
 
                 if formatted == *text {
