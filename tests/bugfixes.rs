@@ -103,6 +103,9 @@ fn test_fypp_list_preserves_utf8() {
 fn test_modernize_operators_preserves_utf8() {
     let config = Config {
         modernize_operators: Toggle::Enable,
+        // Disable the (intended) unicode->ascii comment conversion: this
+        // test pins byte-level UTF-8 integrity, not conversion policy.
+        unicode_to_ascii: false,
         ..Config::default()
     };
     let src = "program t\n    if (s .eq. 'α') x = 1  ! β note\nend program t\n";
@@ -362,5 +365,181 @@ fn test_trailing_amp_comment_no_space_hoisted() {
     assert!(
         out.contains("call foo(a, b)"),
         "statement not rejoined:\n{out}"
+    );
+}
+
+// --- ffmt off: verbatim text AND scope tracking through the region ---
+
+#[test]
+fn test_ffmt_off_keeps_bang_amp_and_spacing_verbatim() {
+    let src = "program t\n    ! ffmt off\n    x   =   1 !&\n    y = 2 ! note!&\n    ! ffmt on\nend program t\n";
+    let out = ffmt::format_string(src);
+    assert!(
+        out.contains("    x   =   1 !&\n    y = 2 ! note!&"),
+        "ffmt off region was altered:\n{out}"
+    );
+}
+
+#[test]
+fn test_scope_tracked_through_ffmt_off_region() {
+    // A block opener inside the off region, closed outside: indentation and
+    // the named end after the region must still be correct.
+    let src = "\
+subroutine s()
+    ! ffmt off
+    if (cond) then
+    ! ffmt on
+        x = 1
+    end if
+end subroutine
+";
+    let out = ffmt::format_string(src);
+    assert!(
+        out.contains("\n        x = 1\n"),
+        "depth lost across ffmt off:\n{out}"
+    );
+    assert!(out.contains("\n    end if\n"), "end if depth wrong:\n{out}");
+    assert!(
+        out.contains("end subroutine s"),
+        "named end wrong after ffmt off:\n{out}"
+    );
+}
+
+// --- Doubled-quote escapes in rewrap/align scanners ---
+
+#[test]
+fn test_split_trailing_comment_escaped_quote_long_line() {
+    // The `!` is inside the string (after a '' escape); a long line must not
+    // be split at it as if it were a trailing comment.
+    let lit = "'it''s ! not a comment padding padding padding padding padding'";
+    let src = format!(
+        "program t\n    call some_subroutine_name(argument_one, argument_two, argument_three, {lit}, argument_four)\nend program t\n"
+    );
+    let out = ffmt::format_string(&src);
+    let rejoined = out.replace(" &\n", " ").replace("\n", " ").replace("& ", "");
+    assert!(
+        rejoined.contains("it''s ! not a comment padding"),
+        "string literal split at interior '!':\n{out}"
+    );
+}
+
+#[test]
+fn test_align_assignments_escaped_quote_string_not_padded() {
+    let config = ffmt::Config {
+        align_assignments: ffmt::config::Toggle::Enable,
+        ..ffmt::Config::default()
+    };
+    let src = "program t\n    a = 'x''= y'\n    longer_name = 2\nend program t\n";
+    let out = ffmt::format_string_with_config(src, &config);
+    assert!(
+        out.contains("'x''= y'"),
+        "padding inserted inside string literal:\n{out}"
+    );
+}
+
+#[test]
+fn test_rewrap_paren_align_ignores_paren_in_escaped_string() {
+    // The only `(` on the line is inside a string (after a '' escape at a
+    // position that confuses a broken scanner). Wrapping must not align
+    // continuations to it, and must not break inside the string.
+    let lit = "'aa''bb (cc dd ee ff gg hh ii jj kk ll mm nn oo pp qq rr ss tt uu vv ww xx yy zz'";
+    let src = format!("program t\n    result_variable_name = {lit}//suffix_variable//another_suffix_variable//yet_another_one\nend program t\n");
+    let out = ffmt::format_string(&src);
+    let rejoined = out.replace(" &\n", " ").replace("\n", " ").replace("& ", "");
+    assert!(
+        rejoined.contains("aa''bb (cc"),
+        "string literal damaged by rewrap:\n{out}"
+    );
+    let twice = ffmt::format_string(&out);
+    assert_eq!(out, twice, "rewrap not idempotent");
+}
+
+// --- Long directives must never be rewrapped as comments ---
+
+#[test]
+fn test_long_acc_directive_not_rewrapped() {
+    let dir = "!$acc parallel loop gang vector collapse(3) default(present) private(alpha_rho_k, alpha_k, velocity_components) reduction(+:total_energy_sum) copyin(boundary_conditions)";
+    let src = format!("program t\n    {dir}\n    x = 1\nend program t\n");
+    let out = ffmt::format_string(&src);
+    assert!(
+        out.contains(dir),
+        "directive was altered/rewrapped:\n{out}"
+    );
+}
+
+#[test]
+fn test_long_omp_directive_not_rewrapped() {
+    let dir = "!$omp parallel do schedule(dynamic) default(none) shared(very_long_array_name_one, very_long_array_name_two) private(loop_index_variable_i, loop_index_variable_j) reduction(+:accumulator)";
+    let src = format!("program t\n    {dir}\n    x = 1\nend program t\n");
+    let out = ffmt::format_string(&src);
+    assert!(out.contains(dir), "directive was altered/rewrapped:\n{out}");
+}
+
+// --- Doxygen / comment passes ---
+
+#[test]
+fn test_email_in_doxygen_not_split() {
+    let src = "module m\n    !> Contact bob@example.com with questions\n    implicit none\nend module m\n";
+    let out = ffmt::format_string(src);
+    assert!(
+        out.contains("bob@example.com"),
+        "email split as doxygen command:\n{out}"
+    );
+    assert_eq!(
+        out.matches("!>").count() + out.matches("!!").count(),
+        1,
+        "comment was split:\n{out}"
+    );
+}
+
+#[test]
+fn test_doxygen_split_at_real_commands_still_works() {
+    let src = "module m\n    !> @file demo.f90 @brief Does demo things\n    implicit none\nend module m\n";
+    let out = ffmt::format_string(src);
+    assert!(out.contains("@file"), "{out}");
+    assert!(out.contains("@brief"), "{out}");
+    assert!(
+        out.matches('@').count() == 2 && out.contains("!!"),
+        "real doxygen commands no longer split:\n{out}"
+    );
+}
+
+#[test]
+fn test_doxygen_not_joined_when_rewrap_comments_disabled() {
+    let config = ffmt::Config {
+        rewrap_comments: ffmt::config::Toggle::Disable,
+        ..ffmt::Config::default()
+    };
+    let src = "module m\n    !> First line of doc\n    !! second line kept separate\n    implicit none\nend module m\n";
+    let out = ffmt::format_string_with_config(src, &config);
+    assert!(
+        out.contains("!> First line of doc\n") && out.contains("!! second line kept separate"),
+        "doxygen joined despite rewrap-comments=false:\n{out}"
+    );
+}
+
+#[test]
+fn test_range_format_does_not_eat_doxygen_outside_range() {
+    // Range covers ONLY line 2 (the !> line); the !! continuation on line 3
+    // must remain untouched and unconsumed.
+    let src = "module m\n!> doc start\n        !!    weird   continuation   spacing\n    implicit none\nend module m\n";
+    let out = ffmt::format_range(src, 2, 2);
+    assert!(
+        out.contains("        !!    weird   continuation   spacing"),
+        "doxygen continuation outside range was modified:\n{out}"
+    );
+}
+
+#[test]
+fn test_unicode_to_ascii_applies_to_inline_comments() {
+    let config = ffmt::Config {
+        unicode_to_ascii: true,
+        ..ffmt::Config::default()
+    };
+    let src = "program t\n    x = 1  ! \u{2014} em\u{2013}dash \u{201c}quoted\u{201d}\nend program t\n";
+    let out = ffmt::format_string_with_config(src, &config);
+    assert!(
+        !out.contains('\u{2014}') && !out.contains('\u{201c}'),
+        "unicode left in inline comment:\n{out}"
     );
 }

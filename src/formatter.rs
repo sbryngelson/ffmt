@@ -123,8 +123,16 @@ pub fn format_with_config(source: &str, config: &Config, range: Option<(usize, u
             }
         }
 
-        // While formatting is disabled, pass lines through verbatim
+        // While formatting is disabled, pass lines through verbatim — but
+        // keep the scope tracker in sync, so indentation and named ends
+        // AFTER the region are still correct.
         if formatting_disabled {
+            let scope_name = if kind == LineKind::FortranBlockOpen {
+                extract_scope_name(&ll.joined)
+            } else {
+                None
+            };
+            let _ = tracker.process_with_name(kind, scope_name);
             for raw_line in &ll.raw_lines {
                 output_lines.push(raw_line.trim_end().to_string());
             }
@@ -268,9 +276,15 @@ pub fn format_with_config(source: &str, config: &Config, range: Option<(usize, u
                         // Doxygen continuation: apply proper indentation
                         let indented = apply_indent(&content, depth, config.indent_width);
                         output_lines.push(indented);
-                    } else if content.starts_with("!>") {
+                    } else if content.starts_with("!>")
+                        && config.rewrap_comments.is_enabled()
+                        && range.is_none()
+                    {
                         // Doxygen start: collect any following !! continuation lines,
-                        // join the text, and re-wrap as a single block
+                        // join the text, and re-wrap as a single block. Joining is
+                        // a rewrap (gated on rewrap-comments) and consumes the
+                        // following lines, so it is disabled in range mode — it
+                        // would rewrite lines outside the requested range.
                         let marker_text = extract_comment_text(&content, "!>");
                         let mut full_text = marker_text.to_string();
 
@@ -408,7 +422,12 @@ pub fn format_with_config(source: &str, config: &Config, range: Option<(usize, u
                             formatted = maybe_add_end_name(&formatted, &tracker, config);
                         }
 
-                        let wrapped = if config.rewrap_code.is_enabled() {
+                        // Directives (!$acc/!$omp/!DIR$) are never rewrapped:
+                        // breaking one without its sentinel on the
+                        // continuation line silently disables it.
+                        let wrapped = if config.rewrap_code.is_enabled()
+                            && kind != LineKind::Directive
+                        {
                             rewrap_line(&formatted, config.line_length, config.indent_width)
                         } else {
                             vec![formatted.clone()]
@@ -818,6 +837,16 @@ fn process_line(line: &str, config: &Config) -> String {
         KeywordCase::Preserve => {}
     }
 
+    if config.unicode_to_ascii {
+        // Standalone comments are handled in the Comment branch; inline
+        // trailing comments are converted here (code text is left alone —
+        // unicode in code is the programmer's business).
+        let (code, comment) = split_trailing_comment(&result);
+        if !comment.is_empty() {
+            result = format!("{}{}", code, crate::unicode::replace_unicode(comment));
+        }
+    }
+
     result
 }
 
@@ -849,15 +878,28 @@ fn split_doxygen_commands(line: &str) -> Vec<String> {
     };
     let text = extract_comment_text(trimmed, marker);
 
-    // Find @ commands in the text (@ followed by a letter)
+    // Find @ commands in the text. Only a KNOWN doxygen command preceded by
+    // whitespace counts — `bob@example.com` is text, not a command.
+    const DOXYGEN_COMMANDS: &[&str] = &[
+        "param", "return", "returns", "retval", "brief", "details", "author", "authors", "date",
+        "note", "warning", "attention", "see", "sa", "ref", "todo", "bug", "deprecated", "code",
+        "endcode", "example", "file", "ingroup", "defgroup", "addtogroup", "version", "copyright",
+        "remark", "remarks", "par", "pre", "post", "throws", "exception", "tparam", "since",
+        "test", "var", "fn", "name", "mainpage", "section", "subsection", "page", "anchor",
+        "cite", "copydoc", "internal",
+    ];
     let mut at_positions: Vec<usize> = Vec::new();
     let bytes = text.as_bytes();
-    for i in 0..bytes.len() {
-        if bytes[i] == b'@' && i + 1 < bytes.len() && bytes[i + 1].is_ascii_alphabetic() {
-            // Don't count the first @ if it's at position 0 (that's the primary command)
-            if i > 0 {
-                at_positions.push(i);
-            }
+    for i in 1..bytes.len() {
+        if bytes[i] != b'@' || !bytes[i - 1].is_ascii_whitespace() {
+            continue;
+        }
+        let word: String = text[i + 1..]
+            .chars()
+            .take_while(|c| c.is_ascii_alphabetic())
+            .collect();
+        if DOXYGEN_COMMANDS.contains(&word.to_ascii_lowercase().as_str()) {
+            at_positions.push(i);
         }
     }
 
@@ -1155,7 +1197,10 @@ fn rewrap_inline_doxygen(lines: &[String], max_length: usize) -> Vec<String> {
             // Bare !< with no text and no !! continuations — drop the !<
             result.push(code_part.to_string());
         } else {
-            let one_line = format!("{} !< {}", code_part, full_text);
+            // Two spaces before the inline marker: that is the final form
+            // (S102); building it with one space made the fit check pass on
+            // lines that ended up one character over after alignment.
+            let one_line = format!("{}  !< {}", code_part, full_text);
             if one_line.len() <= max_length {
                 result.push(one_line);
             } else {
@@ -1841,11 +1886,13 @@ fn rewrap_fypp_line(line: &str, max_length: usize) -> Vec<String> {
     let mut quote_char = b' ';
     let mut comma_positions: Vec<usize> = Vec::new();
 
-    for i in 0..len {
+    let mut i = 0;
+    while i < len {
         let b = bytes[i];
         if in_string {
             if b == quote_char {
                 if i + 1 < len && bytes[i + 1] == quote_char {
+                    i += 2; // escaped quote — stay in string
                     continue;
                 }
                 in_string = false;
@@ -1862,11 +1909,13 @@ fn rewrap_fypp_line(line: &str, max_length: usize) -> Vec<String> {
                 }
                 comma_positions.push(end);
             }
+            i += 1;
             continue;
         }
         if b == b'\'' || b == b'"' {
             in_string = true;
             quote_char = b;
+            i += 1;
             continue;
         }
         if b == b'(' {
@@ -1881,6 +1930,7 @@ fn rewrap_fypp_line(line: &str, max_length: usize) -> Vec<String> {
             }
             comma_positions.push(end);
         }
+        i += 1;
     }
 
     if comma_positions.is_empty() {
@@ -1959,6 +2009,12 @@ fn rewrap_line(line: &str, max_length: usize, indent_width: usize) -> Vec<String
         return vec![line.to_string()];
     }
 
+    // Full-line comments and directives never belong here: relocating or
+    // wrapping them corrupts the marker (`!$acc` would become a comment).
+    if line.trim_start().starts_with('!') {
+        return vec![line.to_string()];
+    }
+
     // Don't wrap lines with !< inline doxygen — rewrap_inline_doxygen handles these
     if find_inline_doxygen_in_line(line).is_some() {
         return vec![line.to_string()];
@@ -2002,25 +2058,30 @@ fn rewrap_line(line: &str, max_length: usize, indent_width: usize) -> Vec<String
         let mut qch = b' ';
         let mut found = None;
         let cb = content.as_bytes();
-        for i in 0..cb.len() {
+        let mut i = 0;
+        while i < cb.len() {
             if in_str {
                 if cb[i] == qch {
                     if i + 1 < cb.len() && cb[i + 1] == qch {
+                        i += 2; // escaped quote — stay in string
                         continue;
                     }
                     in_str = false;
                 }
+                i += 1;
                 continue;
             }
             if cb[i] == b'\'' || cb[i] == b'"' {
                 in_str = true;
                 qch = cb[i];
+                i += 1;
                 continue;
             }
             if cb[i] == b'(' {
                 found = Some(indent + i + 1);
                 break;
             }
+            i += 1;
         }
         found
     };
@@ -2136,27 +2197,34 @@ fn rewrap_line(line: &str, max_length: usize, indent_width: usize) -> Vec<String
 /// Returns (code_part, comment_part). Comment part includes the `!`.
 fn split_trailing_comment(content: &str) -> (&str, &str) {
     let bytes = content.as_bytes();
+    let len = bytes.len();
     let mut in_string = false;
     let mut quote_char = b' ';
 
-    for (i, &b) in bytes.iter().enumerate() {
+    let mut i = 0;
+    while i < len {
+        let b = bytes[i];
         if in_string {
             if b == quote_char {
-                if i + 1 < bytes.len() && bytes[i + 1] == quote_char {
-                    continue; // doubled quote escape
+                if i + 1 < len && bytes[i + 1] == quote_char {
+                    i += 2; // doubled quote escape — stay in string
+                    continue;
                 }
                 in_string = false;
             }
+            i += 1;
             continue;
         }
         if b == b'\'' || b == b'"' {
             in_string = true;
             quote_char = b;
+            i += 1;
             continue;
         }
         if b == b'!' {
             return (&content[..i], &content[i..]);
         }
+        i += 1;
     }
     (content, "")
 }
@@ -2787,19 +2855,23 @@ fn find_assignment_eq(line: &str) -> Option<usize> {
     let mut quote_char = b' ';
     let mut paren_depth = 0i32;
 
-    for i in 0..len {
+    let mut i = 0;
+    while i < len {
         if in_string {
             if bytes[i] == quote_char {
                 if i + 1 < len && bytes[i + 1] == quote_char {
+                    i += 2; // escaped quote — stay in string
                     continue;
                 }
                 in_string = false;
             }
+            i += 1;
             continue;
         }
         if bytes[i] == b'\'' || bytes[i] == b'"' {
             in_string = true;
             quote_char = bytes[i];
+            i += 1;
             continue;
         }
         if bytes[i] == b'!' {
@@ -2818,14 +2890,15 @@ fn find_assignment_eq(line: &str) -> Option<usize> {
             // Check it's not ==, /=, <=, >=, =>
             let prev = if i > 0 { bytes[i - 1] } else { b' ' };
             let next = if i + 1 < len { bytes[i + 1] } else { b' ' };
-            if next == b'=' || next == b'>' {
-                continue;
-            }
-            if prev == b'/' || prev == b'<' || prev == b'>' || prev == b'=' || prev == b'!' {
+            if next == b'=' || next == b'>' || prev == b'/' || prev == b'<' || prev == b'>'
+                || prev == b'=' || prev == b'!'
+            {
+                i += 1;
                 continue;
             }
             return Some(i);
         }
+        i += 1;
     }
 
     None
