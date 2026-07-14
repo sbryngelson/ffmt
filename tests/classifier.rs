@@ -387,3 +387,58 @@ fn test_interface_operator() {
         LineKind::FortranBlockOpen
     );
 }
+
+// --- Self-contained single-line constructs (issue #5) ---
+// A construct that opens and closes on the same line has a net-zero indent
+// effect, so it must classify as a statement (not a block opener), otherwise
+// the trailing lines leak an indent level.
+#[test]
+fn test_single_line_do_is_statement() {
+    assert_eq!(
+        classify("do d = 1, n; s = s + d; end do"),
+        LineKind::FortranStatement
+    );
+}
+#[test]
+fn test_single_line_if_then_is_statement() {
+    assert_eq!(
+        classify("if (x > 0) then; y = 1; end if"),
+        LineKind::FortranStatement
+    );
+}
+#[test]
+fn test_single_line_block_is_statement() {
+    assert_eq!(
+        classify("block; call foo; end block"),
+        LineKind::FortranStatement
+    );
+}
+#[test]
+fn test_single_line_associate_is_statement() {
+    assert_eq!(
+        classify("associate (a => b); x = a; end associate"),
+        LineKind::FortranStatement
+    );
+}
+#[test]
+fn test_single_line_if_then_else_is_statement() {
+    // A continuation (else) between the opener and closer must not disturb the
+    // net-zero balance.
+    assert_eq!(
+        classify("if (x) then; a = 1; else; a = 2; end if"),
+        LineKind::FortranStatement
+    );
+}
+#[test]
+fn test_do_with_body_no_end_stays_open() {
+    // Opener with a same-line body but NO closer still opens a scope.
+    assert_eq!(classify("do i = 1, n; a = 1"), LineKind::FortranBlockOpen);
+}
+#[test]
+fn test_do_reopening_after_close_stays_open() {
+    // Opens, closes, opens again: net +1 → still a block opener.
+    assert_eq!(
+        classify("do i = 1, n; end do; do j = 1, m"),
+        LineKind::FortranBlockOpen
+    );
+}

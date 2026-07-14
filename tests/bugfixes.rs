@@ -726,3 +726,63 @@ fn test_keyword_case_upper_works() {
         "identifier was uppercased:\n{out}"
     );
 }
+
+// --- Single-line `do ...; end do` leaked an indent level (issue #5) ---
+
+#[test]
+fn test_single_line_do_does_not_leak_indent() {
+    // The `do ...; ...; end do` opens and closes on one line (net-zero indent).
+    // The following statement must stay at the SAME indent as the `do` line,
+    // not be over-indented by one level.
+    let src = "module m\n\
+contains\n\
+    subroutine demo(n)\n\
+        integer, intent(in) :: n\n\
+        integer :: d, s\n\
+        s = 0\n\
+        do d = 1, n; s = s + d; end do\n\
+        s = s + 1\n\
+    end subroutine demo\n\
+end module m\n";
+    let out = ffmt::format_string(src);
+    assert!(
+        out.contains("        do d = 1, n; s = s + d; end do\n        s = s + 1\n"),
+        "single-line do leaked an indent level:\n{out}"
+    );
+}
+
+#[test]
+fn test_single_line_do_output_is_idempotent() {
+    // Running ffmt twice must be a no-op (the correct output is the fixed point).
+    let src = "module m\n\
+contains\n\
+    subroutine demo(n)\n\
+        integer, intent(in) :: n\n\
+        integer :: d, s\n\
+        s = 0\n\
+        do d = 1, n; s = s + d; end do\n\
+        s = s + 1\n\
+    end subroutine demo\n\
+end module m\n";
+    let once = ffmt::format_string(src);
+    let twice = ffmt::format_string(&once);
+    assert_eq!(once, twice, "formatting is not idempotent");
+}
+
+#[test]
+fn test_nested_single_line_do_does_not_compound_indent() {
+    // Two single-line constructs in sequence must each net to zero; the final
+    // statement stays at the subroutine-body indent (8 spaces).
+    let src = "program p\n\
+    integer :: i, j, s\n\
+    s = 0\n\
+    do i = 1, 3; s = s + i; end do\n\
+    if (s > 0) then; s = s + 1; end if\n\
+    s = s + 1\n\
+end program p\n";
+    let out = ffmt::format_string(src);
+    assert!(
+        out.contains("    s = s + 1\nend program p\n"),
+        "single-line constructs compounded the indent:\n{out}"
+    );
+}
