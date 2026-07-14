@@ -432,10 +432,7 @@ fn test_single_line_if_then_else_is_statement() {
 #[test]
 fn test_do_with_body_no_end_stays_open() {
     // Opener with a same-line body but NO closer still opens a scope.
-    assert_eq!(
-        classify("do i = 1, n; a = 1"),
-        LineKind::FortranBlockOpen
-    );
+    assert_eq!(classify("do i = 1, n; a = 1"), LineKind::FortranBlockOpen);
 }
 #[test]
 fn test_do_reopening_after_close_stays_open() {
