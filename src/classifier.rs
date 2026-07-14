@@ -480,6 +480,66 @@ fn classify_fortran(trimmed: &str) -> LineKind {
     LineKind::FortranStatement
 }
 
+/// Split a Fortran line into its top-level statements at semicolons, ignoring
+/// semicolons inside string literals and stopping at an inline comment.
+/// Returns the trimmed pieces (empty pieces are kept so callers can skip them).
+fn split_top_level_statements(line: &str) -> Vec<&str> {
+    let bytes = line.as_bytes();
+    let mut pieces = Vec::new();
+    let mut start = 0;
+    let mut in_string = false;
+    let mut quote = b' ';
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if in_string {
+            if b == quote {
+                // Doubled quote is an escape — stay inside the string.
+                if i + 1 < bytes.len() && bytes[i + 1] == quote {
+                    i += 2;
+                    continue;
+                }
+                in_string = false;
+            }
+            i += 1;
+            continue;
+        }
+        match b {
+            b'\'' | b'"' => {
+                in_string = true;
+                quote = b;
+            }
+            b'!' => break, // inline comment — nothing after it is a statement
+            b';' => {
+                pieces.push(line[start..i].trim());
+                start = i + 1;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    pieces.push(line[start..].trim());
+    pieces
+}
+
+/// Net indentation effect of a line's top-level statements: +1 per block
+/// opener, -1 per block closer, 0 for everything else (continuations,
+/// statements). A self-contained single-line construct nets to 0.
+fn net_block_delta(pieces: &[&str]) -> i32 {
+    let mut delta = 0;
+    for &piece in pieces {
+        if piece.is_empty() {
+            continue;
+        }
+        match classify_fortran(piece) {
+            LineKind::FortranBlockOpen => delta += 1,
+            LineKind::FortranBlockClose => delta -= 1,
+            _ => {}
+        }
+    }
+    delta
+}
+
 /// Classify a logical line.
 pub fn classify(line: &str) -> LineKind {
     let trimmed = line.trim();
@@ -518,7 +578,23 @@ pub fn classify(line: &str) -> LineKind {
     }
 
     // 6. Fortran
-    classify_fortran(trimmed)
+    let kind = classify_fortran(trimmed);
+
+    // A construct that opens AND closes on the same line (e.g.
+    // `do d = 1, n; s = s + d; end do`) has a net-zero indent effect. The
+    // leading keyword makes `classify_fortran` report a block opener, which
+    // would leak an indent level onto every following line. When the opener's
+    // matching closer is on the same line (net delta 0), treat the whole line
+    // as a plain statement instead — a block opener and a statement both sit at
+    // the current depth, so the line's own indentation is unchanged.
+    if kind == LineKind::FortranBlockOpen {
+        let pieces = split_top_level_statements(trimmed);
+        if pieces.len() > 1 && net_block_delta(&pieces) == 0 {
+            return LineKind::FortranStatement;
+        }
+    }
+
+    kind
 }
 
 /// Extract the scope name from a Fortran block-opening line.
