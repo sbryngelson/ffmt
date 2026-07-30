@@ -1,3 +1,5 @@
+use lazy_regex::{regex, regex_is_match, regex_replace};
+
 use crate::case_norm::normalize_case;
 use crate::classifier::{
     classify, end_block_keyword, end_statement_has_name, extract_scope_name, LineKind,
@@ -47,18 +49,17 @@ fn apply_indent(line: &str, depth: usize, indent_width: usize) -> String {
 fn is_end_procedure(line: &str) -> bool {
     let trimmed = line.trim();
     let lower = trimmed.to_ascii_lowercase();
-    let re_end_proc = regex::Regex::new(r"(?i)^end\s+(subroutine|function)\b").unwrap();
-    re_end_proc.is_match(&lower)
+    regex_is_match!(r"(?i)^end\s+(subroutine|function)\b", &lower)
 }
 
 /// Check if a line starts a new procedure (subroutine or function).
 fn is_procedure_start(line: &str) -> bool {
     let trimmed = line.trim();
     let lower = trimmed.to_ascii_lowercase();
-    let re_proc = regex::Regex::new(
-        r"(?i)^(?:(?:pure|elemental|impure|recursive|module|integer|real|double\s+precision|complex|character|logical|type\s*\([^)]*\))\s+)*(subroutine|function)\b"
-    ).unwrap();
-    re_proc.is_match(&lower)
+    regex_is_match!(
+        r"(?i)^(?:(?:pure|elemental|impure|recursive|module|integer|real|double\s+precision|complex|character|logical|type\s*\([^)]*\))\s+)*(subroutine|function)\b",
+        &lower
+    )
 }
 
 /// Format a Fortran source string using default config.
@@ -1489,11 +1490,10 @@ fn remove_blanks_before_closers(lines: &[String]) -> Vec<String> {
 /// These are logical unit boundaries that should be separated from following Doxygen comments.
 fn is_major_end_block(line: &str) -> bool {
     let trimmed = line.trim().to_ascii_lowercase();
-    let re = regex::Regex::new(
+    regex_is_match!(
         r"(?i)^end\s+(subroutine|function|module|submodule|program|type|interface)\b",
+        &trimmed
     )
-    .unwrap();
-    re.is_match(&trimmed)
 }
 
 /// Check if a line is `end subroutine` or `end function`.
@@ -1521,10 +1521,10 @@ fn is_module_or_program(line: &str) -> bool {
 /// Check if a line is a subroutine/function opener.
 fn is_procedure_opener(line: &str) -> bool {
     let lower = line.trim().to_ascii_lowercase();
-    let re = regex::Regex::new(
-        r"(?i)^(?:(?:pure|elemental|impure|recursive|module|integer|real|double\s+precision|complex|character|logical|type\s*\([^)]*\))\s+)*(subroutine|function)\b"
-    ).unwrap();
-    re.is_match(&lower)
+    regex_is_match!(
+        r"(?i)^(?:(?:pure|elemental|impure|recursive|module|integer|real|double\s+precision|complex|character|logical|type\s*\([^)]*\))\s+)*(subroutine|function)\b",
+        &lower
+    )
 }
 
 /// Ensure blank lines at structural boundaries:
@@ -1854,9 +1854,9 @@ fn separate_declarations_from_code(lines: &[String]) -> Vec<String> {
     // Track whether we're in a declaration region at the top of a procedure
     let mut in_decl_region = false;
     let mut saw_declaration = false;
-    let proc_re = regex::Regex::new(
+    let proc_re = regex!(
         r"(?i)^(?:(?:pure|elemental|impure|recursive|module|integer|real|double\s+precision|complex|character|logical|type\s*\([^)]*\))\s+)*(subroutine|function)\b"
-    ).unwrap();
+    );
 
     for line in lines {
         let trimmed = line.trim();
@@ -2467,11 +2467,7 @@ fn find_token_breaks(content: &str) -> Vec<(usize, BreakKind)> {
 /// Remove space between Fypp macro name and ( on $: and @: lines.
 /// E.g., "$:GPU_PARALLEL_LOOP (collapse=3)" -> "$:GPU_PARALLEL_LOOP(collapse=3)"
 fn remove_fypp_macro_paren_space(line: &str) -> String {
-    use regex::Regex;
-    use std::sync::OnceLock;
-    static RE: OnceLock<Regex> = OnceLock::new();
-    let re = RE.get_or_init(|| Regex::new(r"(?m)^(\s*[@$]:[\w]+)\s+\(").unwrap());
-    re.replace(line, r"${1}(").to_string()
+    regex_replace!(r"(?m)^(\s*[@$]:[\w]+)\s+\(", line, r"${1}(").to_string()
 }
 
 /// Normalize comma spacing inside Fypp '[...]' list arguments.
@@ -2613,28 +2609,22 @@ fn modernize_relational_operators(lines: &[String]) -> Vec<String> {
 /// Enforce `::` separator in variable declarations that are missing it.
 /// E.g., `integer x` -> `integer :: x`, `type(foo) bar` -> `type(foo) :: bar`.
 fn enforce_double_colon(lines: &[String]) -> Vec<String> {
-    use regex::Regex;
-    use std::sync::OnceLock;
-
     // Match simple type declarations without ::
     // Group 1: indent + type keyword (+ optional kind/attributes)
     // Group 2: variable name(s)
-    static RE_SIMPLE: OnceLock<Regex> = OnceLock::new();
-    let re_simple = RE_SIMPLE.get_or_init(|| {
-        Regex::new(r"(?i)^(\s*(?:integer|real|logical|complex|character|double\s+precision)(?:\s*\([^)]*\))?(?:\s*,\s*(?:intent\s*\([^)]*\)|dimension\s*\([^)]*\)|allocatable|pointer|target|optional|save|parameter|value|contiguous|external|intrinsic|volatile|asynchronous|protected|private|public))*)\s+([a-zA-Z_]\w*.*)$").unwrap()
-    });
+    let re_simple = regex!(
+        r"(?i)^(\s*(?:integer|real|logical|complex|character|double\s+precision)(?:\s*\([^)]*\))?(?:\s*,\s*(?:intent\s*\([^)]*\)|dimension\s*\([^)]*\)|allocatable|pointer|target|optional|save|parameter|value|contiguous|external|intrinsic|volatile|asynchronous|protected|private|public))*)\s+([a-zA-Z_]\w*.*)$"
+    );
 
     // Match type()/class() declarations without ::
-    static RE_TYPED: OnceLock<Regex> = OnceLock::new();
-    let re_typed = RE_TYPED.get_or_init(|| {
-        Regex::new(r"(?i)^(\s*(?:type|class)\s*\([^)]*\)(?:\s*,\s*(?:intent\s*\([^)]*\)|dimension\s*\([^)]*\)|allocatable|pointer|target|optional|save|parameter|value|contiguous|external|intrinsic|volatile|asynchronous|protected|private|public))*)\s+([a-zA-Z_]\w*.*)$").unwrap()
-    });
+    let re_typed = regex!(
+        r"(?i)^(\s*(?:type|class)\s*\([^)]*\)(?:\s*,\s*(?:intent\s*\([^)]*\)|dimension\s*\([^)]*\)|allocatable|pointer|target|optional|save|parameter|value|contiguous|external|intrinsic|volatile|asynchronous|protected|private|public))*)\s+([a-zA-Z_]\w*.*)$"
+    );
 
     // Non-declaration keywords that might look like declarations
-    static RE_SKIP: OnceLock<Regex> = OnceLock::new();
-    let re_skip = RE_SKIP.get_or_init(|| {
-        Regex::new(r"(?i)^\s*(?:if|do|else|end|call|return|write|read|print|open|close|format|go\s*to|select|case|where|forall|block|associate|critical|sync|lock|unlock|event|error|stop|exit|cycle|continue|contains|implicit|use|module|program|subroutine|function|interface|abstract|procedure|entry|include|equivalence|common|data|namelist|save|allocate|deallocate|nullify|inquire|rewind|backspace|endfile|flush|wait|type\s+is|class\s+is|class\s+default|rank\s+default|rank\s*\()\b").unwrap()
-    });
+    let re_skip = regex!(
+        r"(?i)^\s*(?:if|do|else|end|call|return|write|read|print|open|close|format|go\s*to|select|case|where|forall|block|associate|critical|sync|lock|unlock|event|error|stop|exit|cycle|continue|contains|implicit|use|module|program|subroutine|function|interface|abstract|procedure|entry|include|equivalence|common|data|namelist|save|allocate|deallocate|nullify|inquire|rewind|backspace|endfile|flush|wait|type\s+is|class\s+is|class\s+default|rank\s+default|rank\s*\()\b"
+    );
 
     lines
         .iter()

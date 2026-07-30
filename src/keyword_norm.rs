@@ -1,3 +1,4 @@
+use lazy_regex::{regex, Lazy};
 use regex::Regex;
 use std::sync::OnceLock;
 
@@ -70,38 +71,34 @@ fn split_at_comment(line: &str) -> (&str, &str) {
 fn normalize_code_keywords(code: &str) -> String {
     // end* compounds — applied with a suffix check: `endif = 3` is an
     // assignment to a variable named endif, not a block close.
-    static END_RE: OnceLock<Regex> = OnceLock::new();
-    let end_re = END_RE.get_or_init(|| {
-        Regex::new(r"(?i)\b(end)(do|if|select|subroutine|function|module|submodule|program|interface|type|block|associate|where|forall|enum|critical|team)\b").unwrap()
-    });
-    static RE: OnceLock<Vec<(Regex, &str)>> = OnceLock::new();
+    let end_re = regex!(
+        r"(?i)\b(end)(do|if|select|subroutine|function|module|submodule|program|interface|type|block|associate|where|forall|enum|critical|team)\b"
+    );
+    static RE: OnceLock<Vec<(&Lazy<Regex>, &str)>> = OnceLock::new();
     let patterns = RE.get_or_init(|| {
         vec![
             // end* compounds — capture both parts to preserve case:
             // "ENDDO" → "END DO", "EndDo" → "End Do", "enddo" → "end do"
 
             // else if — normalize spacing (but NOT elsewhere, which is a single keyword)
-            (Regex::new(r"(?i)\b(else)\s*(if)\b").unwrap(), "$1 $2"),
-            (Regex::new(r"(?i)\b(select)\s*(case)\b").unwrap(), "$1 $2"),
-            (Regex::new(r"(?i)\b(select)\s*(type)\b").unwrap(), "$1 $2"),
-            (Regex::new(r"(?i)\b(select)\s*(rank)\b").unwrap(), "$1 $2"),
+            (regex!(r"(?i)\b(else)\s*(if)\b"), "$1 $2"),
+            (regex!(r"(?i)\b(select)\s*(case)\b"), "$1 $2"),
+            (regex!(r"(?i)\b(select)\s*(type)\b"), "$1 $2"),
+            (regex!(r"(?i)\b(select)\s*(rank)\b"), "$1 $2"),
             // double precision
-            (
-                Regex::new(r"(?i)\b(double)\s*(precision)\b").unwrap(),
-                "$1 $2",
-            ),
+            (regex!(r"(?i)\b(double)\s*(precision)\b"), "$1 $2"),
             // error stop, change team, go to
-            (Regex::new(r"(?i)\b(error)\s*(stop)\b").unwrap(), "$1 $2"),
-            (Regex::new(r"(?i)\b(change)\s*(team)\b").unwrap(), "$1 $2"),
-            (Regex::new(r"(?i)\b(go)\s*(to)\b").unwrap(), "$1 $2"),
+            (regex!(r"(?i)\b(error)\s*(stop)\b"), "$1 $2"),
+            (regex!(r"(?i)\b(change)\s*(team)\b"), "$1 $2"),
+            (regex!(r"(?i)\b(go)\s*(to)\b"), "$1 $2"),
             // coarray compounds
-            (Regex::new(r"(?i)\b(sync)\s*(all)\b").unwrap(), "$1 $2"),
-            (Regex::new(r"(?i)\b(sync)\s*(images)\b").unwrap(), "$1 $2"),
-            (Regex::new(r"(?i)\b(sync)\s*(memory)\b").unwrap(), "$1 $2"),
-            (Regex::new(r"(?i)\b(event)\s*(post)\b").unwrap(), "$1 $2"),
-            (Regex::new(r"(?i)\b(event)\s*(wait)\b").unwrap(), "$1 $2"),
-            (Regex::new(r"(?i)\b(fail)\s*(image)\b").unwrap(), "$1 $2"),
-            (Regex::new(r"(?i)\b(form)\s*(team)\b").unwrap(), "$1 $2"),
+            (regex!(r"(?i)\b(sync)\s*(all)\b"), "$1 $2"),
+            (regex!(r"(?i)\b(sync)\s*(images)\b"), "$1 $2"),
+            (regex!(r"(?i)\b(sync)\s*(memory)\b"), "$1 $2"),
+            (regex!(r"(?i)\b(event)\s*(post)\b"), "$1 $2"),
+            (regex!(r"(?i)\b(event)\s*(wait)\b"), "$1 $2"),
+            (regex!(r"(?i)\b(fail)\s*(image)\b"), "$1 $2"),
+            (regex!(r"(?i)\b(form)\s*(team)\b"), "$1 $2"),
         ]
     });
 
