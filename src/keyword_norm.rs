@@ -1,6 +1,4 @@
-use lazy_regex::{regex, Lazy};
-use regex::Regex;
-use std::sync::OnceLock;
+use lazy_regex::{regex, Captures};
 
 /// Normalize compound Fortran keywords by inserting a space.
 ///
@@ -71,36 +69,11 @@ fn split_at_comment(line: &str) -> (&str, &str) {
 fn normalize_code_keywords(code: &str) -> String {
     // end* compounds — applied with a suffix check: `endif = 3` is an
     // assignment to a variable named endif, not a block close.
+    // end* compounds — capture both parts to preserve case:
+    // "ENDDO" → "END DO", "EndDo" → "End Do", "enddo" → "end do"
     let end_re = regex!(
         r"(?i)\b(end)(do|if|select|subroutine|function|module|submodule|program|interface|type|block|associate|where|forall|enum|critical|team)\b"
     );
-    static RE: OnceLock<Vec<(&Lazy<Regex>, &str)>> = OnceLock::new();
-    let patterns = RE.get_or_init(|| {
-        vec![
-            // end* compounds — capture both parts to preserve case:
-            // "ENDDO" → "END DO", "EndDo" → "End Do", "enddo" → "end do"
-
-            // else if — normalize spacing (but NOT elsewhere, which is a single keyword)
-            (regex!(r"(?i)\b(else)\s*(if)\b"), "$1 $2"),
-            (regex!(r"(?i)\b(select)\s*(case)\b"), "$1 $2"),
-            (regex!(r"(?i)\b(select)\s*(type)\b"), "$1 $2"),
-            (regex!(r"(?i)\b(select)\s*(rank)\b"), "$1 $2"),
-            // double precision
-            (regex!(r"(?i)\b(double)\s*(precision)\b"), "$1 $2"),
-            // error stop, change team, go to
-            (regex!(r"(?i)\b(error)\s*(stop)\b"), "$1 $2"),
-            (regex!(r"(?i)\b(change)\s*(team)\b"), "$1 $2"),
-            (regex!(r"(?i)\b(go)\s*(to)\b"), "$1 $2"),
-            // coarray compounds
-            (regex!(r"(?i)\b(sync)\s*(all)\b"), "$1 $2"),
-            (regex!(r"(?i)\b(sync)\s*(images)\b"), "$1 $2"),
-            (regex!(r"(?i)\b(sync)\s*(memory)\b"), "$1 $2"),
-            (regex!(r"(?i)\b(event)\s*(post)\b"), "$1 $2"),
-            (regex!(r"(?i)\b(event)\s*(wait)\b"), "$1 $2"),
-            (regex!(r"(?i)\b(fail)\s*(image)\b"), "$1 $2"),
-            (regex!(r"(?i)\b(form)\s*(team)\b"), "$1 $2"),
-        ]
-    });
 
     // Process only non-string portions of the code.
     let bytes = code.as_bytes();
@@ -135,7 +108,7 @@ fn normalize_code_keywords(code: &str) -> String {
             segment = {
                 let src = segment.as_str();
                 end_re
-                    .replace_all(src, |caps: &regex::Captures| {
+                    .replace_all(src, |caps: &Captures| {
                         let m = caps.get(0).unwrap();
                         // A block close starts the statement (possibly after
                         // a numeric label or `;`). Anywhere else — after
@@ -156,8 +129,28 @@ fn normalize_code_keywords(code: &str) -> String {
                     })
                     .into_owned()
             };
-            for (re, replacement) in patterns {
-                segment = re.replace_all(&segment, *replacement).to_string();
+            for (re, replacement) in [
+                // else if — normalize spacing (but NOT elsewhere, which is a single keyword)
+                (regex!(r"(?i)\b(else)\s*(if)\b"), "$1 $2"),
+                (regex!(r"(?i)\b(select)\s*(case)\b"), "$1 $2"),
+                (regex!(r"(?i)\b(select)\s*(type)\b"), "$1 $2"),
+                (regex!(r"(?i)\b(select)\s*(rank)\b"), "$1 $2"),
+                // double precision
+                (regex!(r"(?i)\b(double)\s*(precision)\b"), "$1 $2"),
+                // error stop, change team, go to
+                (regex!(r"(?i)\b(error)\s*(stop)\b"), "$1 $2"),
+                (regex!(r"(?i)\b(change)\s*(team)\b"), "$1 $2"),
+                (regex!(r"(?i)\b(go)\s*(to)\b"), "$1 $2"),
+                // coarray compounds
+                (regex!(r"(?i)\b(sync)\s*(all)\b"), "$1 $2"),
+                (regex!(r"(?i)\b(sync)\s*(images)\b"), "$1 $2"),
+                (regex!(r"(?i)\b(sync)\s*(memory)\b"), "$1 $2"),
+                (regex!(r"(?i)\b(event)\s*(post)\b"), "$1 $2"),
+                (regex!(r"(?i)\b(event)\s*(wait)\b"), "$1 $2"),
+                (regex!(r"(?i)\b(fail)\s*(image)\b"), "$1 $2"),
+                (regex!(r"(?i)\b(form)\s*(team)\b"), "$1 $2"),
+            ] {
+                segment = re.replace_all(&segment, replacement).to_string();
             }
             result.push_str(&segment);
         }
