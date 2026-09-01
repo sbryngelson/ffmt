@@ -157,7 +157,15 @@ jobs:
           cargo build --release
 
       - name: Clone MFC
-        run: git clone --depth 1 https://github.com/MFlowCode/MFC.git /tmp/MFC
+        # Pin to the last commit known to compile cleanly with NVHPC 24.5 --gpu mp.
+        # MFC d101a279 (2026-07-29) removed #ifndef MFC_POST_PROCESS guards in
+        # m_model.fpp, which triggers an NVHPC 24.5 internal LLVM crash in
+        # m_model_s_read_stl_binary_ during X86 DAG instruction selection.
+        run: |
+          git clone --no-checkout https://github.com/MFlowCode/MFC.git /tmp/MFC
+          cd /tmp/MFC
+          git fetch --depth 1 origin eb7939281874118ff6c84223591f45751cec7e3c
+          git checkout FETCH_HEAD
 
       - name: Format MFC source with ffmt
         run: |
