@@ -786,3 +786,212 @@ end program p\n";
         "single-line constructs compounded the indent:\n{out}"
     );
 }
+
+// --- Comment re-wrap must not orphan the overflow onto its own line (#9) ---
+
+/// 124 characters; overflows the 132-column limit once indented 12 columns.
+const LONG_COMMENT: &str = "! Indices for U and F: (rho, rho*vel(1), rho*vel(2), rho*vel(3), By, Bz, E) Note: vel and B are permutated, so vel(1) is the";
+
+#[test]
+fn test_comment_overflow_reflows_into_next_comment_line() {
+    // Wrapping the body in `#:if` adds one indent level, which pushes the
+    // comment 4 columns over the limit. The trailing `the` must join the
+    // following comment line instead of becoming a line of its own.
+    let src = format!(
+        "module m\ncontains\n    subroutine s(x)\n        real, intent(inout) :: x\n        \
+#:if SOME_CONDITION\n        {LONG_COMMENT}\n        ! normal velocity, and x is the normal direction\n        \
+x = 1.0\n        #:endif\n    end subroutine s\nend module m\n"
+    );
+    let out = ffmt::format_string(&src);
+    assert!(
+        !out.contains("! the\n"),
+        "overflow word orphaned onto its own line:\n{out}"
+    );
+    assert!(
+        out.contains("so vel(1) is\n"),
+        "first comment line not wrapped at the expected word:\n{out}"
+    );
+    assert!(
+        out.contains("            ! the normal velocity, and x is the normal direction\n"),
+        "overflow did not reflow into the next comment line:\n{out}"
+    );
+    assert_eq!(
+        out.matches('!').count(),
+        2,
+        "comment block gained or lost a line:\n{out}"
+    );
+}
+
+#[test]
+fn test_comment_overflow_reflow_is_idempotent() {
+    let src = format!(
+        "module m\ncontains\n    subroutine s(x)\n        real, intent(inout) :: x\n        \
+#:if SOME_CONDITION\n        {LONG_COMMENT}\n        ! normal velocity, and x is the normal direction\n        \
+x = 1.0\n        #:endif\n    end subroutine s\nend module m\n"
+    );
+    let once = ffmt::format_string(&src);
+    let twice = ffmt::format_string(&once);
+    assert_eq!(once, twice, "reflowed comment is not idempotent");
+}
+
+#[test]
+fn test_comment_overflow_cascades_through_the_block() {
+    // Every line of the block is over the limit, so each one absorbs the
+    // overflow from above and passes its own tail down. Only past the last
+    // line may the leftovers start a new one.
+    let src = format!(
+        "program p\n    if (x > 0) then\n        if (y > 0) then\n            {LONG_COMMENT}\n            \
+{LONG_COMMENT}\n            {LONG_COMMENT}\n            x = 1\n        end if\n    end if\nend program p\n"
+    );
+    let out = ffmt::format_string(&src);
+    for line in out.lines() {
+        assert!(
+            line.len() <= 132,
+            "line exceeds the limit after reflow:\n{out}"
+        );
+    }
+    assert!(
+        out.lines()
+            .filter(|l| l.trim_start().starts_with('!'))
+            .all(|l| l.split_whitespace().count() > 2),
+        "a comment line was left with an orphaned fragment:\n{out}"
+    );
+    let twice = ffmt::format_string(&out);
+    assert_eq!(out, twice, "cascaded reflow is not idempotent");
+}
+
+#[test]
+fn test_comment_overflow_does_not_reflow_into_a_separator_line() {
+    // A banner/separator line is not prose, so the overflow must not be
+    // pushed into it.
+    let src = format!(
+        "program p\n    if (x > 0) then\n        if (y > 0) then\n            {LONG_COMMENT}\n            \
+! ----------------------------------------\n            x = 1\n        end if\n    end if\nend program p\n"
+    );
+    let out = ffmt::format_string(&src);
+    assert!(
+        out.contains("! ----------------------------------------"),
+        "separator line was rewritten:\n{out}"
+    );
+    assert!(
+        out.contains("! the\n"),
+        "overflow should stay on its own line above a separator:\n{out}"
+    );
+}
+
+#[test]
+fn test_comment_overflow_does_not_consume_ffmt_marker() {
+    let src = format!(
+        "program p\n    if (x > 0) then\n        if (y > 0) then\n            {LONG_COMMENT}\n            \
+! ffmt off\n            x   =   1\n            ! ffmt on\n        end if\n    end if\nend program p\n"
+    );
+    let out = ffmt::format_string(&src);
+    assert!(
+        out.contains("! ffmt off"),
+        "ffmt marker was consumed by the comment reflow:\n{out}"
+    );
+    assert!(
+        out.contains("x   =   1"),
+        "formatting-disabled region was formatted anyway:\n{out}"
+    );
+}
+
+#[test]
+fn test_comment_overflow_not_reflowed_in_range_mode() {
+    // Range mode must not rewrite the comment line below the range.
+    let src = format!(
+        "program p\n    if (x > 0) then\n        if (y > 0) then\n            {LONG_COMMENT}\n            \
+! normal velocity, and x is the normal direction\n            x = 1\n        end if\n    end if\nend program p\n"
+    );
+    let out = ffmt::format_range(&src, 4, 4);
+    assert!(
+        out.contains("            ! normal velocity, and x is the normal direction"),
+        "comment outside the range was modified:\n{out}"
+    );
+}
+
+/// Build a program whose over-long comment is followed by `next`.
+fn block_after_long_comment(next: &str) -> String {
+    format!(
+        "program p\n    if (x > 0) then\n        if (y > 0) then\n            {LONG_COMMENT}\n            \
+{next}\n            x = 1\n        end if\n    end if\nend program p\n"
+    )
+}
+
+#[test]
+fn test_overflow_does_not_absorb_structured_comment_lines() {
+    // Only running text may absorb overflow. Everything that carries structure
+    // ends the block, leaving the overflow on its own line as before.
+    for next in [
+        "! TODO: rewrite this loop",
+        "! NOTE: see the paper",
+        "! - first item",
+        "! 1. first step",
+        "! @param x the thing",
+        "! ===== Initialization =====",
+        "! > quoted text",
+        "! # heading",
+    ] {
+        let out = ffmt::format_string(&block_after_long_comment(next));
+        assert!(
+            out.contains("! the\n"),
+            "overflow was pushed into a structured comment line {next:?}:\n{out}"
+        );
+        assert!(
+            out.contains(&format!("            {next}\n")),
+            "structured comment line {next:?} was rewritten:\n{out}"
+        );
+    }
+}
+
+#[test]
+fn test_overflow_does_not_absorb_marker_comments() {
+    // `!&` is a protected Fypp continuation marker and `!DEC$` / `!GCC$` are
+    // vendor directives. Neither is prose, and master left both alone.
+    for next in [
+        "!& keep me",
+        "!DEC$ ATTRIBUTES INLINE :: foo",
+        "!GCC$ unroll 4",
+    ] {
+        let out = ffmt::format_string(&block_after_long_comment(next));
+        assert!(
+            out.contains("! the\n"),
+            "overflow was pushed into marker line {next:?}:\n{out}"
+        );
+        assert!(
+            !out.contains("! the &") && !out.contains("! the DEC$") && !out.contains("! the GCC$"),
+            "marker line {next:?} was merged into the prose:\n{out}"
+        );
+    }
+}
+
+#[test]
+fn test_overflow_does_not_absorb_unspaced_comment() {
+    // With space-after-comment off, `!text` keeps its shape and must not be
+    // pulled into a reflow that would insert the space the user turned off.
+    let config = ffmt::Config {
+        space_after_comment: Toggle::Disable,
+        ..ffmt::Config::default()
+    };
+    let out = ffmt::format_string_with_config(&block_after_long_comment("!unspaced note"), &config);
+    assert!(
+        out.contains("!unspaced note"),
+        "unspaced comment was reflowed despite space-after-comment=false:\n{out}"
+    );
+}
+
+#[test]
+fn test_overflow_still_absorbs_ordinary_prose() {
+    // The tightened guard must not block the case the fix exists for.
+    let out = ffmt::format_string(&block_after_long_comment(
+        "! normal velocity, and x is the normal direction",
+    ));
+    assert!(
+        !out.contains("! the\n"),
+        "ordinary prose no longer absorbs the overflow:\n{out}"
+    );
+    assert!(
+        out.contains("! the normal velocity, and x is the normal direction"),
+        "overflow did not reflow into the following prose line:\n{out}"
+    );
+}

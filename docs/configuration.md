@@ -125,7 +125,9 @@ private; public :: s_foo        private; public :: s_foo  ! preserved
 
 ### `rewrap-comments` (toggle)
 
-Re-wrap long `!` and `!!` comment blocks at `line-length`. Doxygen `!>` / `!!` blocks are joined and re-wrapped as units. Short consecutive comment lines are merged.
+Re-wrap long `!` and `!!` comment blocks at `line-length`. Doxygen `!>` / `!!` blocks are joined and re-wrapped as units. Short consecutive comment lines are merged. When a comment of running prose overflows, the overflow is pushed into the following prose line of the same block rather than left on a line of its own.
+
+Only running text absorbs overflow. A comment line that carries structure ends the block and is never rewritten: any marker (`!!`, `!>`, `!<`, `!*`, `!@`, `!$`, `!&`, or a vendor directive such as `!DEC$`), a blank comment line, a separator banner (`! ----`, `! === Setup ===`), a bullet or numbered item (`! - x`, `! 1. x`), a `TODO:`-style tag, a line indented past the marker for alignment, and `! ffmt off`. A comment written without the space after `!` is left alone as well.
 
 **Default:** `true`
 
