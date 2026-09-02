@@ -4,7 +4,7 @@ use crate::classifier::{
 };
 use crate::config::{Config, EndOfLine, KeywordCase};
 use crate::keyword_norm::normalize_keywords;
-use crate::reader::read_logical_lines;
+use crate::reader::{read_logical_lines, LogicalLine};
 use crate::scope::ScopeTracker;
 use crate::whitespace::normalize_whitespace;
 
@@ -349,12 +349,38 @@ pub fn format_with_config(source: &str, config: &Config, range: Option<(usize, u
                         output_lines.extend(wrapped);
                     } else {
                         let indented = apply_indent(&content, depth, config.indent_width);
-                        let wrapped = if config.rewrap_comments.is_enabled() {
-                            wrap_comment(&indented, config.line_length, depth, config.indent_width)
+                        if !config.rewrap_comments.is_enabled() {
+                            output_lines.push(indented);
                         } else {
-                            vec![indented.clone()]
-                        };
-                        output_lines.extend(wrapped);
+                            let wrapped = wrap_comment(
+                                &indented,
+                                config.line_length,
+                                depth,
+                                config.indent_width,
+                            );
+                            // A prose comment that overflows must not leave its tail
+                            // as a standalone one-word line: push the overflow into
+                            // the following comment lines of the same block instead.
+                            // That rewrites those lines, so it is disabled in range
+                            // mode, which must not touch lines outside the range.
+                            let reflow = wrapped.len() > 1
+                                && range.is_none()
+                                && ll.raw_lines.len() == 1
+                                && prose_comment_text(&content).is_some();
+                            if reflow {
+                                reflow_comment_block(
+                                    &content,
+                                    &logical_lines,
+                                    &mut idx,
+                                    &mut tracker,
+                                    depth,
+                                    config,
+                                    &mut output_lines,
+                                );
+                            } else {
+                                output_lines.extend(wrapped);
+                            }
+                        }
                     }
                 }
                 LineKind::Blank => unreachable!(),
@@ -746,17 +772,22 @@ fn emit_hoisted_comments(
     output_lines: &mut Vec<String>,
 ) {
     for comment in comments {
-        let c = if config.unicode_to_ascii {
-            crate::unicode::replace_unicode(comment)
-        } else {
-            comment.clone()
-        };
-        let c = if config.space_after_comment.is_enabled() {
-            normalize_comment_space(&c)
-        } else {
-            c
-        };
+        let c = normalize_comment_content(comment, config);
         output_lines.push(apply_indent(&c, depth, config.indent_width));
+    }
+}
+
+/// Apply the per-comment content cleanups (unicode folding, marker spacing).
+fn normalize_comment_content(content: &str, config: &Config) -> String {
+    let c = if config.unicode_to_ascii {
+        crate::unicode::replace_unicode(content)
+    } else {
+        content.to_string()
+    };
+    if config.space_after_comment.is_enabled() {
+        normalize_comment_space(&c)
+    } else {
+        c
     }
 }
 
@@ -1025,6 +1056,109 @@ fn split_doxygen_commands(line: &str) -> Vec<String> {
 fn extract_comment_text<'a>(line: &'a str, marker: &str) -> &'a str {
     let after_marker = &line[marker.len()..];
     after_marker.strip_prefix(' ').unwrap_or(after_marker)
+}
+
+/// Text of a plain `!` comment that can be reflowed, or `None`.
+///
+/// Only free prose takes part in reflowing: Doxygen markers carry structure,
+/// separator banners (`! ----`) and blank comment lines end a paragraph, and
+/// `! ffmt off` is a directive rather than a comment.
+fn prose_comment_text(content: &str) -> Option<&str> {
+    if !content.starts_with('!') {
+        return None;
+    }
+    let second = content.as_bytes().get(1).copied();
+    if matches!(
+        second,
+        Some(b'!') | Some(b'>') | Some(b'<') | Some(b'*') | Some(b'@') | Some(b'$')
+    ) {
+        return None;
+    }
+    if is_ffmt_marker(content).is_some() {
+        return None;
+    }
+    let text = extract_comment_text(content, "!");
+    if !text.chars().any(|c| c.is_alphanumeric()) {
+        return None;
+    }
+    Some(text)
+}
+
+/// Move as many leading words of `words` as fit into one `prefix`-ed comment
+/// line, appended to `output_lines`. At least one word always moves, so a word
+/// longer than `avail` gets its own line instead of looping forever.
+fn emit_packed_comment_line(
+    words: &mut Vec<String>,
+    avail: usize,
+    prefix: &str,
+    output_lines: &mut Vec<String>,
+) {
+    let mut line = String::new();
+    let mut used = 0;
+    for word in words.iter() {
+        if line.is_empty() {
+            line.push_str(word);
+        } else if line.len() + 1 + word.len() <= avail {
+            line.push(' ');
+            line.push_str(word);
+        } else {
+            break;
+        }
+        used += 1;
+    }
+    words.drain(..used);
+    output_lines.push(format!("{}{}", prefix, line));
+}
+
+/// Emit an over-long prose comment, pushing its overflow into the comment
+/// lines that follow it rather than leaving a one-word line behind.
+///
+/// `content` is the already-normalized text of the comment at `idx`. Every
+/// following prose comment line of the same block is consumed (advancing `idx`
+/// and `tracker`), absorbs the overflow from above, and passes its own
+/// overflow down; whatever is left past the end of the block starts new lines.
+fn reflow_comment_block(
+    content: &str,
+    logical_lines: &[LogicalLine],
+    idx: &mut usize,
+    tracker: &mut ScopeTracker,
+    depth: usize,
+    config: &Config,
+    output_lines: &mut Vec<String>,
+) {
+    let prefix = format!("{}! ", " ".repeat(depth * config.indent_width));
+    let avail = if config.line_length > prefix.len() {
+        config.line_length - prefix.len()
+    } else {
+        40
+    };
+
+    let mut carry: Vec<String> = prose_comment_text(content)
+        .unwrap_or("")
+        .split_whitespace()
+        .map(String::from)
+        .collect();
+    emit_packed_comment_line(&mut carry, avail, &prefix, output_lines);
+
+    while !carry.is_empty() && *idx + 1 < logical_lines.len() {
+        let next_ll = &logical_lines[*idx + 1];
+        let next_kind = classify(&next_ll.joined);
+        if next_kind != LineKind::Comment || next_ll.raw_lines.len() != 1 {
+            break;
+        }
+        let next_content = normalize_comment_content(next_ll.joined.trim().trim_start(), config);
+        let Some(next_text) = prose_comment_text(&next_content) else {
+            break;
+        };
+        carry.extend(next_text.split_whitespace().map(String::from));
+        *idx += 1;
+        let _ = tracker.process(next_kind);
+        emit_packed_comment_line(&mut carry, avail, &prefix, output_lines);
+    }
+
+    while !carry.is_empty() {
+        emit_packed_comment_line(&mut carry, avail, &prefix, output_lines);
+    }
 }
 
 /// Wrap a long comment line at word boundaries.
