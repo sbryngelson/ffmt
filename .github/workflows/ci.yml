@@ -116,13 +116,22 @@ jobs:
   mfc-nvhpc:
     name: MFC NVHPC ${{ matrix.target }}
     runs-on: ubuntu-22.04
-    container: nvcr.io/nvidia/nvhpc:24.5-devel-cuda_multi-ubuntu22.04
+    container: nvcr.io/nvidia/nvhpc:26.3-devel-cuda_multi-ubuntu22.04
     env:
       CC:  nvc
       CXX: nvc++
       FC:  nvfortran
       OMPI_ALLOW_RUN_AS_ROOT:         1
       OMPI_ALLOW_RUN_AS_ROOT_CONFIRM: 1
+      # Target generic x86-64 rather than the runner's own CPU. GitHub's
+      # ubuntu-22.04 pool mixes AVX-512-capable and non-capable hosts, and
+      # nvfortran's default -tp=native turns that into nondeterministic
+      # codegen: on an AVX-512 draw it emitted an RSQRT14S that its own LLVM
+      # backend could not select, aborting llc while compiling m_model.fpp.
+      # Mirrors the flags MFC uses in its own NVHPC CI.
+      FFLAGS:   -tp=px -Kieee -noswitcherror
+      CFLAGS:   -tp=px
+      CXXFLAGS: -tp=px
     strategy:
       fail-fast: false
       matrix:
