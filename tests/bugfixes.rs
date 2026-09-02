@@ -909,3 +909,89 @@ fn test_comment_overflow_not_reflowed_in_range_mode() {
         "comment outside the range was modified:\n{out}"
     );
 }
+
+/// Build a program whose over-long comment is followed by `next`.
+fn block_after_long_comment(next: &str) -> String {
+    format!(
+        "program p\n    if (x > 0) then\n        if (y > 0) then\n            {LONG_COMMENT}\n            \
+{next}\n            x = 1\n        end if\n    end if\nend program p\n"
+    )
+}
+
+#[test]
+fn test_overflow_does_not_absorb_structured_comment_lines() {
+    // Only running text may absorb overflow. Everything that carries structure
+    // ends the block, leaving the overflow on its own line as before.
+    for next in [
+        "! TODO: rewrite this loop",
+        "! NOTE: see the paper",
+        "! - first item",
+        "! 1. first step",
+        "! @param x the thing",
+        "! ===== Initialization =====",
+        "! > quoted text",
+        "! # heading",
+    ] {
+        let out = ffmt::format_string(&block_after_long_comment(next));
+        assert!(
+            out.contains("! the\n"),
+            "overflow was pushed into a structured comment line {next:?}:\n{out}"
+        );
+        assert!(
+            out.contains(&format!("            {next}\n")),
+            "structured comment line {next:?} was rewritten:\n{out}"
+        );
+    }
+}
+
+#[test]
+fn test_overflow_does_not_absorb_marker_comments() {
+    // `!&` is a protected Fypp continuation marker and `!DEC$` / `!GCC$` are
+    // vendor directives. Neither is prose, and master left both alone.
+    for next in [
+        "!& keep me",
+        "!DEC$ ATTRIBUTES INLINE :: foo",
+        "!GCC$ unroll 4",
+    ] {
+        let out = ffmt::format_string(&block_after_long_comment(next));
+        assert!(
+            out.contains("! the\n"),
+            "overflow was pushed into marker line {next:?}:\n{out}"
+        );
+        assert!(
+            !out.contains("! the &") && !out.contains("! the DEC$") && !out.contains("! the GCC$"),
+            "marker line {next:?} was merged into the prose:\n{out}"
+        );
+    }
+}
+
+#[test]
+fn test_overflow_does_not_absorb_unspaced_comment() {
+    // With space-after-comment off, `!text` keeps its shape and must not be
+    // pulled into a reflow that would insert the space the user turned off.
+    let config = ffmt::Config {
+        space_after_comment: Toggle::Disable,
+        ..ffmt::Config::default()
+    };
+    let out = ffmt::format_string_with_config(&block_after_long_comment("!unspaced note"), &config);
+    assert!(
+        out.contains("!unspaced note"),
+        "unspaced comment was reflowed despite space-after-comment=false:\n{out}"
+    );
+}
+
+#[test]
+fn test_overflow_still_absorbs_ordinary_prose() {
+    // The tightened guard must not block the case the fix exists for.
+    let out = ffmt::format_string(&block_after_long_comment(
+        "! normal velocity, and x is the normal direction",
+    ));
+    assert!(
+        !out.contains("! the\n"),
+        "ordinary prose no longer absorbs the overflow:\n{out}"
+    );
+    assert!(
+        out.contains("! the normal velocity, and x is the normal direction"),
+        "overflow did not reflow into the following prose line:\n{out}"
+    );
+}

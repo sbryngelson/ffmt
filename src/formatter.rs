@@ -352,20 +352,18 @@ pub fn format_with_config(source: &str, config: &Config, range: Option<(usize, u
                         if !config.rewrap_comments.is_enabled() {
                             output_lines.push(indented);
                         } else {
-                            let wrapped = wrap_comment(
-                                &indented,
-                                config.line_length,
-                                depth,
-                                config.indent_width,
-                            );
                             // A prose comment that overflows must not leave its tail
                             // as a standalone one-word line: push the overflow into
                             // the following comment lines of the same block instead.
                             // That rewrites those lines, so it is disabled in range
                             // mode, which must not touch lines outside the range.
-                            let reflow = wrapped.len() > 1
+                            // The raw line is tested as well as the normalized one, so
+                            // that a marker normalization cannot turn into prose.
+                            let reflow = indented.len() > config.line_length
+                                && config.line_length < 1000
                                 && range.is_none()
                                 && ll.raw_lines.len() == 1
+                                && prose_comment_text(trimmed.trim_start()).is_some()
                                 && prose_comment_text(&content).is_some();
                             if reflow {
                                 reflow_comment_block(
@@ -378,7 +376,12 @@ pub fn format_with_config(source: &str, config: &Config, range: Option<(usize, u
                                     &mut output_lines,
                                 );
                             } else {
-                                output_lines.extend(wrapped);
+                                output_lines.extend(wrap_comment(
+                                    &indented,
+                                    config.line_length,
+                                    depth,
+                                    config.indent_width,
+                                ));
                             }
                         }
                     }
@@ -1058,28 +1061,63 @@ fn extract_comment_text<'a>(line: &'a str, marker: &str) -> &'a str {
     after_marker.strip_prefix(' ').unwrap_or(after_marker)
 }
 
-/// Text of a plain `!` comment that can be reflowed, or `None`.
+/// Characters that make a horizontal rule when repeated.
+const RULE_CHARS: &[char] = &['-', '=', '*', '#', '_', '~', '+'];
+
+/// Text of a plain `!` comment that is free prose, or `None`.
 ///
-/// Only free prose takes part in reflowing: Doxygen markers carry structure,
-/// separator banners (`! ----`) and blank comment lines end a paragraph, and
-/// `! ffmt off` is a directive rather than a comment.
+/// Reflowing moves words between lines, so it may only touch lines that are
+/// running text. Everything that carries structure is refused, and refusing it
+/// also ends the block: a marker of any kind (`!!`, `!>`, `!<`, `!*`, `!@`,
+/// `!$`, `!&`, or a vendor directive such as `!DEC$`), a blank comment line, a
+/// separator banner, a bullet or numbered list item, a `TODO:`-style tag, and
+/// `! ffmt off`. Anything not spelled exactly `!` + one space is a marker of
+/// some kind, which also leaves an unspaced `!text` alone when
+/// `space-after-comment` is off.
 fn prose_comment_text(content: &str) -> Option<&str> {
-    if !content.starts_with('!') {
-        return None;
-    }
-    let second = content.as_bytes().get(1).copied();
-    if matches!(
-        second,
-        Some(b'!') | Some(b'>') | Some(b'<') | Some(b'*') | Some(b'@') | Some(b'$')
-    ) {
+    let text = content.strip_prefix("! ")?;
+    // A second space is deliberate alignment (tables, ASCII art), not prose.
+    if text.starts_with(' ') {
         return None;
     }
     if is_ffmt_marker(content).is_some() {
         return None;
     }
-    let text = extract_comment_text(content, "!");
+    // Blank comment lines and pure banners (`! ----`) have nothing to reflow.
     if !text.chars().any(|c| c.is_alphanumeric()) {
         return None;
+    }
+    let first = text.chars().next()?;
+    if "-*+>|#@=~:.".contains(first) {
+        return None;
+    }
+    // A run of rule characters marks a titled banner (`! === Setup ===`).
+    let mut prev = '\0';
+    let mut run = 1;
+    for c in text.chars() {
+        if c == prev && RULE_CHARS.contains(&c) {
+            run += 1;
+            if run >= 4 {
+                return None;
+            }
+        } else {
+            run = 1;
+            prev = c;
+        }
+    }
+    let word = text.split_whitespace().next()?;
+    // `TODO:`, `NOTE:`, `FIXME:` start a new remark rather than continue one.
+    if let Some(tag) = word.strip_suffix(':') {
+        if !tag.is_empty() && tag.chars().all(|c| c.is_ascii_uppercase() || c == '_') {
+            return None;
+        }
+    }
+    // `1.` / `2)` open a numbered list item.
+    if let Some((num, sep)) = word.split_at_checked(word.len().saturating_sub(1)) {
+        if (sep == "." || sep == ")") && !num.is_empty() && num.chars().all(|c| c.is_ascii_digit())
+        {
+            return None;
+        }
     }
     Some(text)
 }
@@ -1146,7 +1184,11 @@ fn reflow_comment_block(
         if next_kind != LineKind::Comment || next_ll.raw_lines.len() != 1 {
             break;
         }
-        let next_content = normalize_comment_content(next_ll.joined.trim().trim_start(), config);
+        let raw_next = next_ll.joined.trim();
+        if prose_comment_text(raw_next).is_none() {
+            break;
+        }
+        let next_content = normalize_comment_content(raw_next, config);
         let Some(next_text) = prose_comment_text(&next_content) else {
             break;
         };
