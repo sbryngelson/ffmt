@@ -116,27 +116,14 @@ jobs:
   mfc-nvhpc:
     name: MFC NVHPC ${{ matrix.target }}
     runs-on: ubuntu-22.04
-    container: nvcr.io/nvidia/nvhpc:26.3-devel-cuda_multi-ubuntu22.04
-    env:
-      CC:  nvc
-      CXX: nvc++
-      FC:  nvfortran
-      OMPI_ALLOW_RUN_AS_ROOT:         1
-      OMPI_ALLOW_RUN_AS_ROOT_CONFIRM: 1
-      # Target generic x86-64 rather than the runner's own CPU. GitHub's
-      # ubuntu-22.04 pool mixes AVX-512-capable and non-capable hosts, and
-      # nvfortran's default -tp=native turns that into nondeterministic
-      # codegen: on an AVX-512 draw it emitted an RSQRT14S that its own LLVM
-      # backend could not select, aborting llc while compiling m_model.fpp.
-      # Mirrors the flags MFC uses in its own NVHPC CI.
-      FFLAGS:   -tp=px -Kieee -noswitcherror
-      CFLAGS:   -tp=px
-      CXXFLAGS: -tp=px
     strategy:
       fail-fast: false
       matrix:
         target: [cpu, gpu-omp]
+    env:
+      NVHPC_IMAGE: nvcr.io/nvidia/nvhpc:26.3-devel-cuda_multi-ubuntu22.04
     steps:
+      # Free disk on the host before pulling the ~25-30 GB cuda_multi image.
       - name: Free disk space
         uses: jlumbroso/free-disk-space@main
         with:
@@ -148,41 +135,97 @@ jobs:
 
       - uses: actions/checkout@v4
 
+      # Retry the pull: nvcr.io intermittently times out ("context deadline
+      # exceeded") under load. Pulls resume completed layers, so retries are
+      # cheap. This is why the job drives a container by hand instead of using
+      # the container: directive, which offers no way to retry.
+      - name: Pull NVHPC container
+        run: |
+          for attempt in 1 2 3 4 5; do
+            docker pull "$NVHPC_IMAGE" && exit 0
+            echo "docker pull failed (attempt $attempt/5); retrying in $((attempt * 30))s..."
+            sleep $((attempt * 30))
+          done
+          echo "::error::Failed to pull $NVHPC_IMAGE after 5 attempts"
+          exit 1
+
+      # A long-lived container preserves installed packages and env across
+      # steps, the way container: did.
+      #
+      # -tp=px targets generic x86-64 rather than the runner's own CPU.
+      # GitHub's ubuntu-22.04 pool mixes AVX-512-capable and non-capable
+      # hosts, and nvfortran's default -tp=native turns that into
+      # nondeterministic codegen: on an AVX-512 draw it emitted an RSQRT14S
+      # that its own LLVM backend could not select, aborting llc while
+      # compiling m_model.fpp. Mirrors the flags MFC uses in its own NVHPC CI.
+      - name: Start NVHPC container
+        run: |
+          docker run -d --name nvhpc \
+            --security-opt seccomp=unconfined \
+            -v "${{ github.workspace }}:/workspace" \
+            -w /workspace \
+            -e CC=nvc \
+            -e CXX=nvc++ \
+            -e FC=nvfortran \
+            -e OMPI_ALLOW_RUN_AS_ROOT=1 \
+            -e OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1 \
+            -e "FFLAGS=-tp=px -Kieee -noswitcherror" \
+            -e CFLAGS=-tp=px \
+            -e CXXFLAGS=-tp=px \
+            "$NVHPC_IMAGE" sleep infinity
+
       - name: Install dependencies
         run: |
-          apt-get update -y
-          apt-get install -y cmake python3 python3-venv python3-pip \
-                             libfftw3-dev libhdf5-dev hdf5-tools \
-                             openmpi-bin libopenmpi-dev git curl
+          docker exec nvhpc bash -c '
+            set -e
+            apt-get update -y
+            apt-get install -y cmake python3 python3-venv python3-pip \
+                               libfftw3-dev libhdf5-dev hdf5-tools \
+                               openmpi-bin libopenmpi-dev git curl
+            # The repo is bind-mounted from the host, so git sees a different
+            # owner. Mark it safe to suppress "dubious ownership" errors.
+            git config --global --add safe.directory /workspace
+          '
 
       - name: Install Rust
         run: |
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+          docker exec nvhpc bash -c '
+            set -e
+            curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          '
 
       - name: Build ffmt
         run: |
-          . "$HOME/.cargo/env"
-          cargo build --release
+          docker exec nvhpc bash -c '
+            set -e
+            . "$HOME/.cargo/env"
+            cargo build --release
+          '
 
       - name: Clone MFC
-        run: git clone --depth 1 https://github.com/MFlowCode/MFC.git /tmp/MFC
+        run: |
+          docker exec nvhpc git clone --depth 1 \
+            https://github.com/MFlowCode/MFC.git /tmp/MFC
 
       - name: Format MFC source with ffmt
         run: |
-          . "$HOME/.cargo/env"
-          ./target/release/ffmt -j $(nproc) /tmp/MFC/src/ 2>/dev/null || true
-          ./target/release/ffmt -j $(nproc) /tmp/MFC/src/ 2>/dev/null || true
+          docker exec nvhpc bash -c '
+            ./target/release/ffmt -j $(nproc) /tmp/MFC/src/ 2>/dev/null || true
+            ./target/release/ffmt -j $(nproc) /tmp/MFC/src/ 2>/dev/null || true
+          '
 
       - name: Build MFC
         run: |
-          cd /tmp/MFC
-          pip install -e toolchain/
-          GPU_FLAG=""
-          if [ "${{ matrix.target }}" = "gpu-acc" ]; then GPU_FLAG="--gpu acc"; fi
-          if [ "${{ matrix.target }}" = "gpu-omp" ]; then GPU_FLAG="--gpu mp"; fi
-          JOBS=${{ matrix.target == 'cpu' && '$(nproc)' || '2' }}
-          ./mfc.sh build -j $JOBS $GPU_FLAG
+          docker exec nvhpc bash -c '
+            set -e
+            cd /tmp/MFC
+            pip install -e toolchain/
+            GPU_FLAG=""
+            if [ "${{ matrix.target }}" = "gpu-acc" ]; then GPU_FLAG="--gpu acc"; fi
+            if [ "${{ matrix.target }}" = "gpu-omp" ]; then GPU_FLAG="--gpu mp"; fi
+            JOBS=${{ matrix.target == 'cpu' && '$(nproc)' || '2' }}
+            ./mfc.sh build -j $JOBS $GPU_FLAG
+          '
 
   docs:
     name: Documentation
