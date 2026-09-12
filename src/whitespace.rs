@@ -50,6 +50,8 @@ enum OpKind {
     Comment,
 }
 
+use lazy_regex::regex;
+
 use crate::config::WhitespaceConfig;
 
 /// Normalize whitespace in a Fortran line.
@@ -117,13 +119,9 @@ fn string_mask_and_comment_start(line: &str) -> (Vec<bool>, usize) {
 /// Add a space between control-flow keywords and `(` where missing.
 /// E.g., `if(x)` → `if (x)`, `call foo(` → `call foo(`  (call already has space)
 pub fn add_keyword_paren_spaces(line: &str) -> String {
-    use regex::Regex;
-    use std::sync::OnceLock;
-
-    static RE: OnceLock<Regex> = OnceLock::new();
-    let re = RE.get_or_init(|| {
-        Regex::new(r"(?i)\b(if|else\s*if|do\s+while|select\s+case|select\s+type|select\s+rank|where|forall|associate|call|write|read|open|close|inquire|allocate|deallocate|nullify)\(").unwrap()
-    });
+    let re = regex!(
+        r"(?i)\b(if|else\s*if|do\s+while|select\s+case|select\s+type|select\s+rank|where|forall|associate|call|write|read|open|close|inquire|allocate|deallocate|nullify)\("
+    );
 
     // Walk through matches and insert space before (
     // We need to be careful not to modify content inside strings or comments
@@ -237,11 +235,7 @@ fn normalize_comment_bang(comment: &str) -> String {
 /// Remove space between `intent` and `(` — convention is `intent(in)` not `intent (in)`.
 /// Leaves string literals and comments untouched.
 pub fn normalize_intent_paren(line: &str) -> String {
-    use regex::Regex;
-    use std::sync::OnceLock;
-
-    static RE: OnceLock<Regex> = OnceLock::new();
-    let re = RE.get_or_init(|| Regex::new(r"(?i)\bintent\s+\(").unwrap());
+    let re = regex!(r"(?i)\bintent\s+\(");
 
     let (string_mask, comment_start) = string_mask_and_comment_start(line);
     let mut result = String::with_capacity(line.len());
