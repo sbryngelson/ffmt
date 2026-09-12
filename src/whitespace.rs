@@ -1,3 +1,7 @@
+use lazy_regex::regex;
+
+use crate::config::WhitespaceConfig;
+
 /// Token types emitted by the tokenizer.
 #[derive(Debug, Clone, PartialEq)]
 enum Token {
@@ -49,10 +53,6 @@ enum OpKind {
     /// `!` starting inline comment — at least one space before
     Comment,
 }
-
-use lazy_regex::regex;
-
-use crate::config::WhitespaceConfig;
 
 /// Normalize whitespace in a Fortran line.
 pub fn normalize_whitespace(line: &str, ws_config: &WhitespaceConfig) -> String {
