@@ -34,7 +34,7 @@ cat file.fpp | ffmt -            # stdin/stdout
 
 ## Features
 
-- **Code** -- indentation, whitespace normalization, keyword casing, named ends, line wrapping, operator modernization (`.eq.` -> `==`), double-colon enforcement, trailing semicolon removal
+- **Code** -- indentation, whitespace normalization, keyword casing, named ends, line wrapping, operator modernization (`.eq.` -> `==`), double-colon enforcement, trailing semicolon removal, `only :` -> `only:`
 - **Comments** -- rewrapping, inline spacing (S102), `!<` alignment, `!&`/`& !` cleanup, format suppression (`! ffmt off/on`)
 - **Structure** -- blank line management around openers/closers/`#ifdef`, declaration `::` alignment, declaration/use compaction
 - **Preprocessor** -- Fypp (`#:if`, `$:`, `@:`), C preprocessor (`#ifdef`), OpenACC (`!$acc`), OpenMP (`!$omp`)

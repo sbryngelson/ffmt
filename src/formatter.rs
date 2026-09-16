@@ -913,6 +913,7 @@ fn process_line(line: &str, config: &Config) -> String {
         result = crate::whitespace::add_keyword_paren_spaces(&result);
     }
     result = crate::whitespace::normalize_intent_paren(&result);
+    result = crate::whitespace::normalize_only_colon(&result);
     if config.collapse_double_spaces {
         result = crate::whitespace::collapse_double_spaces(&result);
     }
