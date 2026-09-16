@@ -684,6 +684,14 @@ pub fn format_with_config(source: &str, config: &Config, range: Option<(usize, u
         });
     }
 
+    // Align `only:` in consecutive use statements. Runs before
+    // align_declarations, whose align_use_comments pass lines up the `!<`
+    // comments on use statements; padding inserted after that would shift them.
+    if config.align_use_only.is_enabled() {
+        let ll = config.line_length;
+        output_lines = apply(output_lines, &|lines| align_use_only(lines, ll));
+    }
+
     // Align :: in consecutive declaration lines
     if config.align_declarations {
         let cd = config.compact_declarations.is_enabled();
@@ -729,12 +737,6 @@ pub fn format_with_config(source: &str, config: &Config, range: Option<(usize, u
     if config.align_assignments.is_enabled() {
         let ll = config.line_length;
         output_lines = apply(output_lines, &|lines| align_assignments(lines, ll));
-    }
-
-    // Align `only:` in consecutive use statements
-    if config.align_use_only.is_enabled() {
-        let ll = config.line_length;
-        output_lines = apply(output_lines, &|lines| align_use_only(lines, ll));
     }
 
     // Align trailing & continuation markers at column limit

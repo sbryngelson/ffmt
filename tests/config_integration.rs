@@ -605,3 +605,11 @@ fn test_align_use_only_module_name_containing_only_and_intrinsic() {
     let expected = "module m\n\n    use m_only_stuff,                  only: x\n    use, intrinsic :: iso_fortran_env, only: wp => real64\n    use m_x,                           only: d\n\n    implicit none\nend module m\n";
     assert_eq!(result, expected);
 }
+
+#[test]
+fn test_align_use_only_keeps_inline_doxygen_comments_aligned() {
+    let input = "module m\n    use m_derived_types, only: t_foo !< types\n    use m_global, only: a, b !< globals\n    use m_x, only: d !< x\n\n    implicit none\nend module m\n";
+    let result = format_with_config("align-use-only = true", input);
+    let expected = "module m\n\n    use m_derived_types, only: t_foo  !< types\n    use m_global,        only: a, b   !< globals\n    use m_x,             only: d      !< x\n\n    implicit none\nend module m\n";
+    assert_eq!(result, expected);
+}
