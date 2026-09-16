@@ -38,7 +38,7 @@ cat file.fpp | ffmt -            # stdin/stdout
 - **Comments** -- rewrapping, inline spacing (S102), `!<` alignment, `!&`/`& !` cleanup, format suppression (`! ffmt off/on`)
 - **Structure** -- blank line management around openers/closers/`#ifdef`, declaration `::` alignment, declaration/use compaction
 - **Preprocessor** -- Fypp (`#:if`, `$:`, `@:`), C preprocessor (`#ifdef`), OpenACC (`!$acc`), OpenMP (`!$omp`)
-- **Opt-in** -- multi-statement splitting, assignment alignment, `&` column alignment, use-statement reformatting
+- **Opt-in** -- multi-statement splitting, assignment alignment, `only:` alignment, `&` column alignment, use-statement reformatting
 
 Most options accept `true`, `false`, or `"preserve"`. See the [configuration reference](https://ffmt-fortran.readthedocs.io/en/latest/configuration/) for all options.
 

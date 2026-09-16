@@ -197,6 +197,20 @@ long_var = 2                    long_var = 2
 y        = 3                    y = 3
 ```
 
+### `align-use-only` (toggle)
+
+Align `only:` across consecutive `use` statements at the same indentation. Padding goes after the comma before `only:`. A `use` without `only:` stays in the group unchanged; a blank line, comment, or other statement ends the group. Lines that would exceed `line-length` are left alone.
+
+**Default:** `false`
+
+```fortran
+! true                                    ! false
+use m_derived_types, only: t_foo          use m_derived_types, only: t_foo
+use m_global,        only: a, b           use m_global, only: a, b
+use m_mpi                                 use m_mpi
+use m_x,             only: d              use m_x, only: d
+```
+
 ### `align-ampersand` (toggle)
 
 Align trailing `&` continuation markers at the column limit.

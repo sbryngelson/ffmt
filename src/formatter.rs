@@ -684,6 +684,14 @@ pub fn format_with_config(source: &str, config: &Config, range: Option<(usize, u
         });
     }
 
+    // Align `only:` in consecutive use statements. Runs before
+    // align_declarations, whose align_use_comments pass lines up the `!<`
+    // comments on use statements; padding inserted after that would shift them.
+    if config.align_use_only.is_enabled() {
+        let ll = config.line_length;
+        output_lines = apply(output_lines, &|lines| align_use_only(lines, ll));
+    }
+
     // Align :: in consecutive declaration lines
     if config.align_declarations {
         let cd = config.compact_declarations.is_enabled();
@@ -3179,6 +3187,108 @@ fn find_assignment_eq(line: &str) -> Option<usize> {
         i += 1;
     }
 
+    None
+}
+
+/// Align `only:` across consecutive `use` statements at the same indentation.
+/// Padding is inserted after the comma that precedes `only:`. A `use` without
+/// `only:` and continuation lines of a `use` statement stay in the group
+/// unchanged; anything else ends the group.
+fn align_use_only(lines: &[String], max_length: usize) -> Vec<String> {
+    let mut result: Vec<String> = Vec::with_capacity(lines.len());
+    let mut i = 0;
+
+    while i < lines.len() {
+        // Collect a group: indices of `only:` lines and the column of `only:`.
+        let group_start = i;
+        let mut group: Vec<(usize, usize)> = Vec::new();
+        let mut group_indent: Option<usize> = None;
+        let mut in_use = false; // inside a `use` statement (for continuations)
+
+        while i < lines.len() {
+            let line = &lines[i];
+            let trimmed = line.trim_start();
+            let lower = trimmed.to_ascii_lowercase();
+            let is_use = lower.starts_with("use ") || lower.starts_with("use,");
+            let is_continuation = in_use && trimmed.starts_with('&');
+
+            if is_continuation {
+                in_use = trimmed.trim_end().ends_with('&');
+                i += 1;
+                continue;
+            }
+            if !is_use || trimmed.starts_with('#') {
+                break;
+            }
+            let indent = leading_spaces(line);
+            if group_indent.is_some_and(|gi| gi != indent) {
+                break;
+            }
+            group_indent = Some(indent);
+            let (code_part, _) = split_trailing_comment(trimmed);
+            in_use = code_part.trim_end().ends_with('&');
+            if let Some(col) = find_use_only(line) {
+                group.push((i, col));
+            }
+            i += 1;
+        }
+
+        if group.len() < 2 {
+            let end = i.max(group_start + 1).min(lines.len());
+            result.extend(lines[group_start..end].iter().cloned());
+            if i == group_start {
+                i += 1;
+            }
+            continue;
+        }
+
+        let max_col = group.iter().map(|&(_, c)| c).max().unwrap();
+        let mut gi = 0;
+        for (idx, line) in lines.iter().enumerate().take(i).skip(group_start) {
+            if gi < group.len() && group[gi].0 == idx {
+                let col = group[gi].1;
+                gi += 1;
+                if col < max_col {
+                    let new_line = format!(
+                        "{}{}{}",
+                        line[..col].trim_end(),
+                        " ".repeat(max_col - col + 1),
+                        &line[col..]
+                    );
+                    if new_line.len() <= max_length {
+                        result.push(new_line);
+                        continue;
+                    }
+                }
+            }
+            result.push(line.clone());
+        }
+    }
+
+    result
+}
+
+/// Find the byte column of `only:` in a `use` statement's code portion
+/// (outside any trailing comment). The `only:` must follow a comma so that
+/// `use m, only:` is matched but `use m_only: ...` is not.
+fn find_use_only(line: &str) -> Option<usize> {
+    let trimmed = line.trim_start();
+    if trimmed.starts_with('#') || trimmed.starts_with("$:") || trimmed.starts_with("@:") {
+        return None;
+    }
+    let indent = leading_spaces(line);
+    let (code_part, _) = split_trailing_comment(trimmed);
+    let lower = code_part.to_ascii_lowercase();
+    let mut search_from = 0;
+    while let Some(rel) = lower[search_from..].find("only") {
+        let pos = search_from + rel;
+        let after = lower[pos + 4..].trim_start();
+        let before = lower[..pos].trim_end();
+        if after.starts_with(':') && before.ends_with(',') {
+            return Some(indent + pos);
+        }
+        search_from = pos + 4;
+    }
     None
 }
 

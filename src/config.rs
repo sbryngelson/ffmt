@@ -133,6 +133,9 @@ pub struct Config {
     /// Align = in consecutive assignment statements. Accepts true/false/"preserve".
     #[serde(rename = "align-assignments")]
     pub align_assignments: Toggle,
+    /// Align `only:` in consecutive use statements. Accepts true/false/"preserve".
+    #[serde(rename = "align-use-only")]
+    pub align_use_only: Toggle,
     /// Reformat use-statement imports. "one-per-line" puts each imported name on its own line.
     /// Accepts "one-per-line", false, or "preserve".
     #[serde(rename = "use-formatting")]
@@ -227,6 +230,7 @@ impl Default for Config {
             split_statements: Toggle::Disable,
             align_ampersand: Toggle::Disable,
             align_assignments: Toggle::Disable,
+            align_use_only: Toggle::Disable,
             use_formatting: Toggle::Disable,
             whitespace: WhitespaceConfig::default(),
             files: FilesConfig::default(),
