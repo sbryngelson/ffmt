@@ -613,3 +613,13 @@ fn test_align_use_only_keeps_inline_doxygen_comments_aligned() {
     let expected = "module m\n\n    use m_derived_types, only: t_foo  !< types\n    use m_global,        only: a, b   !< globals\n    use m_x,             only: d      !< x\n\n    implicit none\nend module m\n";
     assert_eq!(result, expected);
 }
+
+// ===== `only :` normalization =====
+
+#[test]
+fn test_only_colon_normalized_end_to_end() {
+    let input = "module m\n    use m_a, only : a\n    use, intrinsic :: iso_c_binding, ONLY  : c_int\n\n    implicit none\nend module m\n";
+    let result = format_with_config("", input);
+    let expected = "module m\n\n    use m_a, only: a\n    use, intrinsic :: iso_c_binding, only: c_int\n\n    implicit none\nend module m\n";
+    assert_eq!(result, expected);
+}

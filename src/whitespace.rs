@@ -256,6 +256,39 @@ pub fn normalize_intent_paren(line: &str) -> String {
     result
 }
 
+/// Remove space between `only` and `:` in use statements — convention is
+/// `only:` not `only :`. Leaves string literals and comments untouched.
+pub fn normalize_only_colon(line: &str) -> String {
+    let trimmed = line.trim_start();
+    let lower = trimmed.to_ascii_lowercase();
+    if !(lower.starts_with("use ") || lower.starts_with("use,")) {
+        return line.to_string();
+    }
+
+    let re = regex!(r"(?i)\bonly\s+:");
+
+    let (string_mask, comment_start) = string_mask_and_comment_start(line);
+    let mut result = String::with_capacity(line.len());
+    let mut last_end = 0;
+
+    for m in re.find_iter(line) {
+        if string_mask[m.start()] || m.start() >= comment_start {
+            continue;
+        }
+        // `only ::` is not an only-list; leave it alone.
+        if line[m.end()..].starts_with(':') {
+            continue;
+        }
+        result.push_str(&line[last_end..m.start()]);
+        // Preserve original case of "only", drop the whitespace before :
+        result.push_str(&line[m.start()..m.start() + 4]);
+        result.push(':');
+        last_end = m.end();
+    }
+    result.push_str(&line[last_end..]);
+    result
+}
+
 /// Collapse runs of 2+ spaces to a single space outside of strings and comments.
 pub fn collapse_double_spaces(line: &str) -> String {
     let bytes = line.as_bytes();

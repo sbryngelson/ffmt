@@ -190,6 +190,8 @@ Align `=` signs across consecutive assignment statements.
 
 **Default:** `false`
 
+`"preserve"` only disables this pass; `collapse-double-spaces` and whitespace normalization still run, so existing manual alignment is not retained.
+
 ```fortran
 ! true                          ! false
 x        = 1                    x = 1

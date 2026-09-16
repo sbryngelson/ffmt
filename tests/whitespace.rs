@@ -263,3 +263,44 @@ fn test_intent_inout() {
         "real(wp), intent(inout) :: y"
     );
 }
+
+// --- `only :` -> `only:` in use statements ---
+#[test]
+fn test_only_colon_space_removed() {
+    assert_eq!(
+        ffmt::whitespace::normalize_only_colon("use m, only : a, b"),
+        "use m, only: a, b"
+    );
+}
+
+#[test]
+fn test_only_colon_multiple_spaces_and_case_preserved() {
+    assert_eq!(
+        ffmt::whitespace::normalize_only_colon("USE m, ONLY   : a"),
+        "USE m, ONLY: a"
+    );
+}
+
+#[test]
+fn test_only_colon_already_compact_unchanged() {
+    let line = "use m, only: a";
+    assert_eq!(ffmt::whitespace::normalize_only_colon(line), line);
+}
+
+#[test]
+fn test_only_colon_not_in_string_or_comment() {
+    let line = "x = 'use m, only : a'  ! use m, only : b";
+    assert_eq!(ffmt::whitespace::normalize_only_colon(line), line);
+}
+
+#[test]
+fn test_only_colon_identifier_containing_only_untouched() {
+    let line = "use m_only :: x";
+    assert_eq!(ffmt::whitespace::normalize_only_colon(line), line);
+}
+
+#[test]
+fn test_only_colon_only_on_use_lines() {
+    let line = "if (only) call s(only : x)";
+    assert_eq!(ffmt::whitespace::normalize_only_colon(line), line);
+}
