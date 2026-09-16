@@ -514,3 +514,94 @@ fn test_idempotency() {
     let pass2 = format_with_config("", &pass1);
     assert_eq!(pass1, pass2, "Formatter should be idempotent");
 }
+
+// ===== Use-only alignment tests =====
+
+#[test]
+fn test_align_use_only_on() {
+    let input = "module m\n    use m_derived_types, only: t_foo\n    use m_global, only: a, b\n    use m_x, only: d\n\n    implicit none\nend module m\n";
+    let result = format_with_config("align-use-only = true", input);
+    let expected = "module m\n\n    use m_derived_types, only: t_foo\n    use m_global,        only: a, b\n    use m_x,             only: d\n\n    implicit none\nend module m\n";
+    assert_eq!(result, expected);
+}
+
+#[test]
+fn test_align_use_only_off_default() {
+    let input = "module m\n    use m_derived_types, only: t_foo\n    use m_global, only: a, b\n\n    implicit none\nend module m\n";
+    let result = format_with_config("", input);
+    assert!(
+        result.contains("    use m_global, only: a, b\n"),
+        "only: should NOT be aligned by default, got: {result}"
+    );
+}
+
+#[test]
+fn test_align_use_only_preserve_does_not_align() {
+    let input = "module m\n    use m_derived_types, only: t_foo\n    use m_global, only: a, b\n\n    implicit none\nend module m\n";
+    let result = format_with_config("align-use-only = \"preserve\"", input);
+    assert!(
+        result.contains("    use m_global, only: a, b\n"),
+        "preserve should not align only:, got: {result}"
+    );
+}
+
+#[test]
+fn test_align_use_only_plain_use_does_not_break_group() {
+    let input = "module m\n    use m_derived_types, only: t_foo\n    use m_mpi\n    use m_x, only: d\n\n    implicit none\nend module m\n";
+    let result = format_with_config("align-use-only = true", input);
+    let expected = "module m\n\n    use m_derived_types, only: t_foo\n    use m_mpi\n    use m_x,             only: d\n\n    implicit none\nend module m\n";
+    assert_eq!(result, expected);
+}
+
+#[test]
+fn test_align_use_only_comment_breaks_group() {
+    let input = "module m\n    use m_derived_types, only: t_foo\n    ! separator\n    use m_x, only: d\n    use m_y, only: e\n\n    implicit none\nend module m\n";
+    let result = format_with_config("align-use-only = true", input);
+    let expected = "module m\n\n    use m_derived_types, only: t_foo\n    ! separator\n    use m_x, only: d\n    use m_y, only: e\n\n    implicit none\nend module m\n";
+    assert_eq!(result, expected);
+}
+
+#[test]
+fn test_align_use_only_with_continued_statement() {
+    let input = "module m\n    use m_derived_types, only: t_foo\n    use m_helpers, only: s_bar, s_baz\n    use m_x, only: d\n\n    implicit none\nend module m\n";
+    let result = format_with_config(
+        "align-use-only = true\nuse-formatting = \"one-per-line\"",
+        input,
+    );
+    let expected = "module m\n\n    use m_derived_types, only: t_foo\n    use m_helpers,       only: &\n        & s_bar, &\n        & s_baz\n    use m_x,             only: d\n\n    implicit none\nend module m\n";
+    assert_eq!(result, expected);
+}
+
+#[test]
+fn test_align_use_only_trailing_comment_and_case() {
+    let input = "module m\n    use m_derived_types, only: t_foo ! only: in comment\n    USE m_x, ONLY: d\n\n    implicit none\nend module m\n";
+    let result = format_with_config("align-use-only = true\nkeyword-case = \"preserve\"", input);
+    let expected = "module m\n\n    use m_derived_types, only: t_foo  ! only: in comment\n    USE m_x,             ONLY: d\n\n    implicit none\nend module m\n";
+    assert_eq!(result, expected);
+}
+
+#[test]
+fn test_align_use_only_respects_line_length() {
+    let input = "module m\n    use m_derived_types_with_a_long_name, only: t_foo\n    use m_x, only: d_variable_name\n\n    implicit none\nend module m\n";
+    let result = format_with_config("align-use-only = true\nline-length = 50", input);
+    assert!(
+        result.contains("    use m_x, only: d_variable_name\n"),
+        "line exceeding line-length should be left alone, got: {result}"
+    );
+}
+
+#[test]
+fn test_align_use_only_idempotent() {
+    let input = "module m\n    use m_derived_types, only: t_foo\n    use m_global, only: a, b\n    use m_x, only: d\n\n    implicit none\nend module m\n";
+    let once = format_with_config("align-use-only = true", input);
+    let twice = format_with_config("align-use-only = true", &once);
+    assert_eq!(once, twice);
+}
+
+#[test]
+fn test_align_use_only_module_name_containing_only_and_intrinsic() {
+    let input = "module m\n    use m_only_stuff, only: x\n    use, intrinsic :: iso_fortran_env, only: wp => real64\n    use m_x, only: d\n\n    implicit none\nend module m\n";
+    let result = format_with_config("align-use-only = true", input);
+    let expected = "module m\n\n    use m_only_stuff,                  only: x\n    use, intrinsic :: iso_fortran_env, only: wp => real64\n    use m_x,                           only: d\n\n    implicit none\nend module m\n";
+    assert_eq!(result, expected);
+}
