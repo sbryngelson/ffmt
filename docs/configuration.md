@@ -213,6 +213,22 @@ use m_mpi                                 use m_mpi
 use m_x,             only: d              use m_x, only: d
 ```
 
+### `leading-ampersand` (boolean)
+
+Emit the optional leading `&` on continuation lines. Set to `false` to drop it. The `&` is kept where Fortran requires it (a continued character literal) and where dropping it would expose a `#`, `!`, or Fypp line to the parser.
+
+**Default:** `true`
+
+```fortran
+! true
+call s_foo(x, &
+           & y, z)
+
+! false
+call s_foo(x, &
+           y, z)
+```
+
 ### `align-ampersand` (toggle)
 
 Align trailing `&` continuation markers at the column limit.

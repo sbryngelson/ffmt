@@ -130,6 +130,10 @@ pub struct Config {
     /// Align trailing & continuation markers at column limit. Accepts true/false/"preserve".
     #[serde(rename = "align-ampersand")]
     pub align_ampersand: Toggle,
+    /// Emit a leading `&` on continuation lines (`& y, z`). When false, the
+    /// optional leading `&` is dropped except where Fortran requires it.
+    #[serde(rename = "leading-ampersand")]
+    pub leading_ampersand: bool,
     /// Align = in consecutive assignment statements. Accepts true/false/"preserve".
     #[serde(rename = "align-assignments")]
     pub align_assignments: Toggle,
@@ -229,6 +233,7 @@ impl Default for Config {
             enforce_double_colon: Toggle::Enable,
             split_statements: Toggle::Disable,
             align_ampersand: Toggle::Disable,
+            leading_ampersand: true,
             align_assignments: Toggle::Disable,
             align_use_only: Toggle::Disable,
             use_formatting: Toggle::Disable,
