@@ -86,6 +86,16 @@ pub fn format_with_config(source: &str, config: &Config, range: Option<(usize, u
         source
     };
     let logical_lines = read_logical_lines(src);
+    let logical_lines = if range.is_none() {
+        let lines = lift_hoisted_comments(logical_lines);
+        if config.split_statements.is_enabled() {
+            split_logical_statements(lines)
+        } else {
+            lines
+        }
+    } else {
+        logical_lines
+    };
     let mut tracker = ScopeTracker::new();
     let mut output_lines: Vec<String> = Vec::new();
     // Output index intervals emitted verbatim for out-of-range logical lines
@@ -217,6 +227,7 @@ pub fn format_with_config(source: &str, config: &Config, range: Option<(usize, u
             None
         };
 
+        let comment_depth = tracker.current_depth();
         let mut depth = tracker.process_with_name(kind, scope_name);
 
         // Track procedure exit
@@ -465,7 +476,12 @@ pub fn format_with_config(source: &str, config: &Config, range: Option<(usize, u
                         // continuation line silently disables it.
                         let wrapped =
                             if config.rewrap_code.is_enabled() && kind != LineKind::Directive {
-                                rewrap_line(&formatted, config.line_length, config.indent_width)
+                                rewrap_line_at(
+                                    &formatted,
+                                    config.line_length,
+                                    config.indent_width,
+                                    Some(comment_depth * config.indent_width),
+                                )
                             } else {
                                 vec![formatted.clone()]
                             };
@@ -553,7 +569,12 @@ pub fn format_with_config(source: &str, config: &Config, range: Option<(usize, u
                         };
 
                         let wrapped = if config.rewrap_code.is_enabled() {
-                            rewrap_line(&formatted, config.line_length, config.indent_width)
+                            rewrap_line_at(
+                                &formatted,
+                                config.line_length,
+                                config.indent_width,
+                                Some(comment_depth * config.indent_width),
+                            )
                         } else {
                             vec![formatted.clone()]
                         };
@@ -658,6 +679,10 @@ pub fn format_with_config(source: &str, config: &Config, range: Option<(usize, u
         let ll = config.line_length;
         output_lines = apply(output_lines, &|lines| rewrap_inline_doxygen(lines, ll));
     }
+    // Consuming `!!` lines can leave blank lines adjacent. Collapse them before
+    // compaction and alignment, which treat a single blank line differently
+    // from two.
+    output_lines = apply(output_lines, &collapse_blank_lines);
     // Compact use statements (after !< rewrap, since rewrap may consume !! lines)
     if config.compact_use.is_enabled() {
         output_lines = apply(output_lines, &compact_use_statements);
@@ -714,19 +739,7 @@ pub fn format_with_config(source: &str, config: &Config, range: Option<(usize, u
     output_lines = apply(output_lines, &strip_trailing_semicolons);
 
     // Collapse consecutive blank lines that may result from semicolon stripping
-    output_lines = apply(output_lines, &|lines: &[String]| {
-        let mut collapsed = Vec::with_capacity(lines.len());
-        let mut prev_blank = false;
-        for line in lines {
-            let is_blank = line.trim().is_empty();
-            if is_blank && prev_blank {
-                continue;
-            }
-            prev_blank = is_blank;
-            collapsed.push(line.clone());
-        }
-        collapsed
-    });
+    output_lines = apply(output_lines, &collapse_blank_lines);
 
     // Modernize legacy relational operators (.eq. -> ==, etc.)
     if config.modernize_operators.is_enabled() {
@@ -775,6 +788,150 @@ pub fn format_with_config(source: &str, config: &Config, range: Option<(usize, u
 
 /// Check if a line is a `! ffmt off` or `! ffmt on` marker.
 /// Returns Some(true) for off, Some(false) for on, None otherwise.
+/// Turn the comments hoisted out of a continuation into ordinary comment lines
+/// ahead of their statement. They then take part in the same block merging and
+/// reflow as written comments; emitting them separately left output that a
+/// second run merged and reflowed. Statements that are emitted verbatim keep
+/// their comments in place and are left alone.
+fn lift_hoisted_comments(lines: Vec<LogicalLine>) -> Vec<LogicalLine> {
+    let mut out = Vec::with_capacity(lines.len());
+    for i in 0..lines.len() {
+        let ll = &lines[i];
+        if ll.hoisted_comments.is_empty() || ll.preserve {
+            out.push(ll.clone());
+            continue;
+        }
+        let interrupted = lines.get(i + 1).is_some_and(|next| {
+            matches!(
+                classify(&next.joined),
+                LineKind::PreprocessorDirective
+                    | LineKind::PreprocessorContinuation
+                    | LineKind::PreprocessorClose
+                    | LineKind::FyppBlockOpen
+                    | LineKind::FyppBlockClose
+                    | LineKind::FyppContinuation
+                    | LineKind::FyppStatement
+            )
+        }) && ll
+            .raw_lines
+            .last()
+            .is_some_and(|l| l.trim_end().ends_with('&'));
+        if interrupted || classify(&ll.joined) == LineKind::InlineFypp {
+            out.push(ll.clone());
+            continue;
+        }
+        for comment in &ll.hoisted_comments {
+            out.push(LogicalLine {
+                joined: comment.clone(),
+                raw_lines: vec![comment.clone()],
+                line_number: ll.line_number,
+                hoisted_comments: Vec::new(),
+                preserve: false,
+            });
+        }
+        let mut stmt = ll.clone();
+        stmt.hoisted_comments.clear();
+        out.push(stmt);
+    }
+    out
+}
+
+/// Split `a; b; c` into one logical line per statement before anything else
+/// looks at it. Splitting only the finished output left the scope tracker and
+/// the wrapper seeing one long block-opening line, so the pieces were indented
+/// and wrapped as if they were a single statement and a second run changed them.
+/// A trailing comment stays with the last statement. `private; public ::` is
+/// kept as written.
+fn split_logical_statements(lines: Vec<LogicalLine>) -> Vec<LogicalLine> {
+    let mut out = Vec::with_capacity(lines.len());
+    for ll in lines {
+        let kind = classify(&ll.joined);
+        let skip = ll.preserve
+            || matches!(
+                kind,
+                LineKind::Blank
+                    | LineKind::Comment
+                    | LineKind::Directive
+                    | LineKind::PreprocessorDirective
+                    | LineKind::PreprocessorContinuation
+                    | LineKind::PreprocessorClose
+                    | LineKind::FyppStatement
+                    | LineKind::FyppBlockOpen
+                    | LineKind::FyppBlockClose
+                    | LineKind::FyppContinuation
+                    | LineKind::InlineFypp
+            )
+            || ll.joined.trim_start().starts_with('!');
+        if skip {
+            out.push(ll);
+            continue;
+        }
+        let (code, comment) = split_trailing_comment(&ll.joined);
+        let lower = code.trim_start().to_ascii_lowercase();
+        if lower.starts_with("private") && lower.contains("; public") {
+            out.push(ll);
+            continue;
+        }
+        let mut cuts: Vec<usize> = Vec::new();
+        let mut quote: Option<u8> = None;
+        let bytes = code.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            let b = bytes[i];
+            match quote {
+                Some(q) => {
+                    if b == q {
+                        if i + 1 < bytes.len() && bytes[i + 1] == q {
+                            i += 1; // escaped quote
+                        } else {
+                            quote = None;
+                        }
+                    }
+                }
+                None => match b {
+                    b'\'' | b'"' => quote = Some(b),
+                    b';' => cuts.push(i),
+                    _ => {}
+                },
+            }
+            i += 1;
+        }
+        if cuts.is_empty() {
+            out.push(ll);
+            continue;
+        }
+        let mut pieces: Vec<String> = Vec::new();
+        let mut start = 0;
+        for &c in &cuts {
+            pieces.push(code[start..c].trim().to_string());
+            start = c + 1;
+        }
+        pieces.push(code[start..].trim().to_string());
+        pieces.retain(|p| !p.is_empty());
+        let Some(last) = pieces.len().checked_sub(1) else {
+            out.push(ll);
+            continue;
+        };
+        if !comment.is_empty() {
+            pieces[last] = format!("{}  {}", pieces[last], comment.trim_end());
+        }
+        for (n, piece) in pieces.into_iter().enumerate() {
+            out.push(LogicalLine {
+                joined: piece.clone(),
+                raw_lines: vec![piece],
+                line_number: ll.line_number,
+                hoisted_comments: if n == 0 {
+                    ll.hoisted_comments.clone()
+                } else {
+                    Vec::new()
+                },
+                preserve: false,
+            });
+        }
+    }
+    out
+}
+
 /// Emit comments hoisted out of a `&` continuation as full-line comments
 /// above the statement, at the statement's indent.
 fn emit_hoisted_comments(
@@ -909,6 +1066,16 @@ fn process_line(line: &str, config: &Config) -> String {
 
     result = normalize_whitespace(&result, &config.whitespace);
 
+    // Modernize before any rewrap: `.lt.` -> `<` shortens the line, and wrapping
+    // the longer form makes a second run wrap differently.
+    if config.modernize_operators.is_enabled() {
+        result = modernize_relational_operators(&[result]).remove(0);
+    }
+
+    if config.whitespace.comma.is_enabled() {
+        result = space_top_level_commas(&result);
+    }
+
     if config.keyword_paren_space.is_enabled() {
         result = crate::whitespace::add_keyword_paren_spaces(&result);
     }
@@ -924,6 +1091,11 @@ fn process_line(line: &str, config: &Config) -> String {
         KeywordCase::Preserve => {}
     }
 
+    // Dropped here, not only in the final pass, so a line is wrapped at the
+    // length it will have (the `;` would otherwise force a break that a second
+    // run, seeing no `;`, undoes).
+    result = strip_trailing_semicolons(&[result]).remove(0);
+
     if config.unicode_to_ascii {
         // Standalone comments are handled in the Comment branch; inline
         // trailing comments are converted here (code text is left alone —
@@ -935,6 +1107,51 @@ fn process_line(line: &str, config: &Config) -> String {
     }
 
     result
+}
+
+/// Put a space after every comma outside parentheses, brackets, braces and
+/// strings. The whitespace pass already does this except in statements such as
+/// `namelist`, where the item list is not tokenized. When such a list is
+/// wrapped, the break comma gains a space as the lines are joined again, so
+/// leaving the others bare makes the next run measure (and wrap) different text.
+fn space_top_level_commas(line: &str) -> String {
+    let trimmed = line.trim_start();
+    if trimmed.starts_with('!')
+        || trimmed.starts_with('#')
+        || trimmed.starts_with("$:")
+        || trimmed.starts_with("@:")
+        || !line.contains(',')
+    {
+        return line.to_string();
+    }
+    let mut out = String::with_capacity(line.len() + 8);
+    let mut depth = 0usize;
+    let mut quote: Option<char> = None;
+    let mut chars = line.chars().peekable();
+    while let Some(c) = chars.next() {
+        out.push(c);
+        match quote {
+            Some(q) => {
+                if c == q {
+                    quote = None;
+                }
+            }
+            None => match c {
+                '\'' | '"' => quote = Some(c),
+                '!' => {
+                    out.extend(chars);
+                    return out;
+                }
+                '(' | '[' | '{' => depth += 1,
+                ')' | ']' | '}' => depth = depth.saturating_sub(1),
+                ',' if depth == 0 && chars.peek().is_some_and(|n| !n.is_whitespace()) => {
+                    out.push(' ');
+                }
+                _ => {}
+            },
+        }
+    }
+    out
 }
 
 /// Count leading spaces in a string.
@@ -1635,8 +1852,7 @@ fn remove_blanks_before_closers(lines: &[String]) -> Vec<String> {
 
         // Remove blank lines after openers
         if prev_was_opener && trimmed.is_empty() {
-            prev_was_opener = false;
-            continue; // skip this blank line
+            continue; // skip every blank in the run, not just the first
         }
 
         // Only EXECUTABLE construct openers (if/do/select/block/...) remove a
@@ -2034,6 +2250,21 @@ fn strip_trailing_semicolons(lines: &[String]) -> Vec<String> {
 
 /// Ensure a blank line between the last declaration and the first executable statement
 /// within procedure bodies. Only acts when there is no blank line already.
+/// The statement starting at `lines[start]`, with its `&` continuation lines
+/// joined, and the number of continuation lines that follow `start`.
+fn continued_statement(lines: &[String], start: usize) -> (String, usize) {
+    let mut statement = lines[start].trim().to_string();
+    let mut extra = 0;
+    while statement.ends_with('&') && start + extra + 1 < lines.len() {
+        statement.pop();
+        extra += 1;
+        let next = lines[start + extra].trim();
+        statement.push(' ');
+        statement.push_str(next.strip_prefix('&').unwrap_or(next).trim_start());
+    }
+    (statement, extra)
+}
+
 fn separate_declarations_from_code(lines: &[String]) -> Vec<String> {
     let mut result: Vec<String> = Vec::with_capacity(lines.len());
     // Track whether we're in a declaration region at the top of a procedure
@@ -2043,7 +2274,10 @@ fn separate_declarations_from_code(lines: &[String]) -> Vec<String> {
         r"(?i)^(?:(?:pure|elemental|impure|recursive|module|integer|real|double\s+precision|complex|character|logical|type\s*\([^)]*\))\s+)*(subroutine|function)\b"
     );
 
-    for line in lines {
+    let mut i = 0;
+    while i < lines.len() {
+        let line = &lines[i];
+        i += 1;
         let trimmed = line.trim();
         let lower = trimmed.to_ascii_lowercase();
 
@@ -2097,9 +2331,14 @@ fn separate_declarations_from_code(lines: &[String]) -> Vec<String> {
                 continue;
             }
 
-            if is_declaration_line(line) {
+            // A wrapped declaration puts its `::` on a later line, so judge the
+            // whole statement and keep its continuation lines together.
+            let (statement, extra) = continued_statement(lines, i - 1);
+            if is_declaration_line(&statement) {
                 saw_declaration = true;
                 result.push(line.clone());
+                result.extend(lines[i..i + extra].iter().cloned());
+                i += extra;
                 continue;
             }
 
@@ -2208,9 +2447,9 @@ fn rewrap_fypp_line(line: &str, max_length: usize) -> Vec<String> {
     for &comma_end in &comma_positions {
         // +2 accounts for trailing " &" on non-last lines
         let current_len = if result.is_empty() {
-            indent + comma_end + 2
+            indent + comma_end + comma_gap(bytes, comma_end) + 2
         } else {
-            cont_with_amp.len() + (comma_end - chunk_start) + 2
+            cont_with_amp.len() + (comma_end - chunk_start) + comma_gap(bytes, comma_end) + 2
         };
 
         if current_len > max_length && chunk_start < comma_end {
@@ -2221,9 +2460,9 @@ fn rewrap_fypp_line(line: &str, max_length: usize) -> Vec<String> {
                     continue;
                 }
                 let len_with_break = if result.is_empty() {
-                    indent + cp + 2
+                    indent + cp + comma_gap(bytes, cp) + 2
                 } else {
-                    cont_with_amp.len() + (cp - chunk_start) + 2
+                    cont_with_amp.len() + (cp - chunk_start) + comma_gap(bytes, cp) + 2
                 };
                 if len_with_break <= max_length {
                     best_break = cp;
@@ -2266,13 +2505,30 @@ fn rewrap_fypp_line(line: &str, max_length: usize) -> Vec<String> {
 /// Returns a Vec of output lines. If the input fits within `max_length`,
 /// returns it unchanged as a single-element Vec.
 fn rewrap_line(line: &str, max_length: usize, indent_width: usize) -> Vec<String> {
+    rewrap_line_at(line, max_length, indent_width, None)
+}
+
+/// `rewrap_line`, with the indent for a trailing comment moved above the code.
+/// A standalone comment takes the depth of the enclosing block, which differs
+/// from the statement's own indent on `end do`, `else` and similar lines;
+/// using the statement's indent would make a second run re-indent it.
+fn rewrap_line_at(
+    line: &str,
+    max_length: usize,
+    indent_width: usize,
+    comment_indent: Option<usize>,
+) -> Vec<String> {
     if line.len() <= max_length || max_length >= 1000 {
         return vec![line.to_string()];
     }
 
     // Full-line comments and directives never belong here: relocating or
     // wrapping them corrupts the marker (`!$acc` would become a comment).
-    if line.trim_start().starts_with('!') {
+    // Preprocessor and Fypp directives (`#:set x = a != b`) are not Fortran
+    // either: the `!=` would be taken for a trailing comment and moved above
+    // its statement.
+    let first = line.trim_start();
+    if first.starts_with('!') || first.starts_with('#') {
         return vec![line.to_string()];
     }
 
@@ -2292,7 +2548,8 @@ fn rewrap_line(line: &str, max_length: usize, indent_width: usize) -> Vec<String
     // If the code portion (with indent) fits but the comment makes it too long,
     // move the comment to its own line(s) above the code.
     if !trailing_comment.is_empty() && indent + code_content.len() <= max_length {
-        let comment_line = format!("{}{}", " ".repeat(indent), trailing_comment.trim());
+        let comment_indent = comment_indent.unwrap_or(indent);
+        let comment_line = format!("{}{}", " ".repeat(comment_indent), trailing_comment.trim());
         let mut result = wrap_comment(&comment_line, max_length, 0, indent_width);
         result.push(format!("{}{}", " ".repeat(indent), code_content));
         return result;
@@ -2387,7 +2644,7 @@ fn rewrap_line(line: &str, max_length: usize, indent_width: usize) -> Vec<String
                 continue;
             }
             let rel = bp - pos;
-            if bp > abs_limit {
+            if bp + comma_gap(content.as_bytes(), bp) > abs_limit {
                 break;
             }
             match kind {
@@ -2644,7 +2901,12 @@ fn find_token_breaks(content: &str) -> Vec<(usize, BreakKind)> {
     // Never break immediately before `%` (member accessor).  A break there
     // would produce `& %member` on the next line, which is a blank within a
     // lexical token — invalid in Fortran free-form (§6.3.2.2).
-    breaks.retain(|&(bp, _)| bp >= len || bytes[bp] != b'%');
+    // Spaces between the break and the `%` count: re-joining the lines puts
+    // one there, and the text must read the same on the next run.
+    breaks.retain(|&(bp, _)| {
+        let next = bytes[bp.min(len)..].iter().find(|&&b| b != b' ');
+        next != Some(&b'%')
+    });
 
     breaks
 }
@@ -2983,6 +3245,28 @@ fn split_multi_statements(lines: &[String], indent_width: usize) -> Vec<String> 
     result
 }
 
+/// 1 when a break at `bp` follows a comma that is not followed by a space.
+/// Joining the continuation again puts a space there, so a break is measured as
+/// if the space were already present; text with and without it then wraps alike.
+fn comma_gap(bytes: &[u8], bp: usize) -> usize {
+    usize::from(bp > 0 && bp < bytes.len() && bytes[bp - 1] == b',' && bytes[bp] != b' ')
+}
+
+/// Collapse runs of blank lines to one.
+fn collapse_blank_lines(lines: &[String]) -> Vec<String> {
+    let mut collapsed = Vec::with_capacity(lines.len());
+    let mut prev_blank = false;
+    for line in lines {
+        let is_blank = line.trim().is_empty();
+        if is_blank && prev_blank {
+            continue;
+        }
+        prev_blank = is_blank;
+        collapsed.push(line.clone());
+    }
+    collapsed
+}
+
 /// Align trailing `&` continuation markers at the column limit.
 /// Lines ending with ` &` are padded so `&` sits at the column limit position.
 fn align_ampersands(lines: &[String], col_limit: usize) -> Vec<String> {
@@ -3052,7 +3336,14 @@ fn align_assignments(lines: &[String], max_length: usize) -> Vec<String> {
             );
             let indent = leading_spaces(&lines[i]);
             let same_indent = group_indent.is_none_or(|gi| gi == indent);
-            if !is_control && same_indent {
+            // Lines of a continued statement (including Fypp macro keyword
+            // arguments such as `& collapse=3)`) and preprocessor lines are
+            // not assignments; padding their `=` changes them on the next run.
+            let trimmed = lines[i].trim();
+            let is_continuation_part = trimmed.starts_with('&') || trimmed.ends_with('&');
+            let is_directive =
+                trimmed.starts_with('#') || trimmed.starts_with("$:") || trimmed.starts_with("@:");
+            if !is_control && same_indent && !is_continuation_part && !is_directive {
                 if let Some(eq_col) = find_assignment_eq(&lines[i]) {
                     group.push(i);
                     eq_columns.push(eq_col);

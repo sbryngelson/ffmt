@@ -995,3 +995,175 @@ fn test_overflow_still_absorbs_ordinary_prose() {
         "overflow did not reflow into the following prose line:\n{out}"
     );
 }
+
+// --- Idempotence: operators are modernized before wrapping ---
+
+#[test]
+fn test_modernized_operators_wrap_is_idempotent() {
+    // `.lt.` -> `<` shortens the statement; wrapping the longer legacy form
+    // used to leave a layout that a second run re-wrapped.
+    let src = "program t\n\
+      if(umask(i-1,j,k).lt.0.5d0.and.umask(i,j,k).lt.0.5d0.and. &\n\
+      vmask(i,j-1,k).lt.0.5d0.and.vmask(i,j,k).lt.0.5d0.and. &\n\
+      wmask(i,j,k-1).lt.0.5d0.and.wmask(i,j,k).lt.0.5d0) then ! in solid\n\
+      x = 1\n\
+      end if\nend program t\n";
+    let config = Config {
+        line_length: 100,
+        ..Config::default()
+    };
+    let once = ffmt::format_string_with_config(src, &config);
+    let twice = ffmt::format_string_with_config(&once, &config);
+    assert_eq!(once, twice, "second run changed the output:\n{once}");
+}
+
+// --- Idempotence: a second run must not change the first run's output ---
+
+fn assert_idempotent(src: &str, config: &Config) {
+    let once = ffmt::format_string_with_config(src, config);
+    let twice = ffmt::format_string_with_config(&once, config);
+    assert_eq!(once, twice, "second run changed the output:\n{once}");
+}
+
+fn with_line_length(line_length: usize) -> Config {
+    Config {
+        line_length,
+        ..Config::default()
+    }
+}
+
+#[test]
+fn test_idempotent_comment_moved_above_block_close() {
+    // A trailing comment moved above `end do` / `else` belongs at the depth of
+    // the block body, as a written comment there would be.
+    let src = "program t\ndo i = 1, n\n  x = 1\n  end do !... i = patch%offset(1) + 1, patch%offset(1) + patch%localSize(1)\n\
+               if (a) then\n  y = 2\n  else !... something quite long that goes past the limit of sixty chars ok\n  y = 3\n  end if\nend program t\n";
+    assert_idempotent(src, &with_line_length(60));
+}
+
+#[test]
+fn test_idempotent_blank_run_after_block_opener() {
+    let src =
+        "program t\n  do i = 1, n\n\n\n     ! Create X\n     x = 1\n  end do\nend program t\n";
+    let out = ffmt::format_string(src);
+    assert!(
+        !out.contains("do i = 1, n\n\n"),
+        "blank lines after an opener should all go:\n{out}"
+    );
+    assert_idempotent(src, &Config::default());
+}
+
+#[test]
+fn test_variable_named_type_is_not_a_block_opener() {
+    let out = ffmt::format_string("program t\nif (a) then\ntype=0\nend if\nend program t\n");
+    assert!(
+        out.contains("    end if"),
+        "`type = 0` must not open a block:\n{out}"
+    );
+    assert_idempotent(
+        "program t\nif (a) then\ntype=0\nend if\nend program t\n",
+        &Config::default(),
+    );
+}
+
+#[test]
+fn test_idempotent_split_statements_on_long_one_liner() {
+    let src = "program t\n     do i=1,Nxt; s=dfloat(i-Ng)/dfloat(Nx); xh(i)=xLength*(xform*s*(0.5d0-s)*(1d0-s)+s); enddo\nend program t\n";
+    let config = Config {
+        split_statements: ffmt::config::Toggle::Enable,
+        ..with_line_length(100)
+    };
+    let out = ffmt::format_string_with_config(src, &config);
+    assert!(
+        out.contains("    do i = 1, Nxt\n        s = dfloat(i - Ng)/dfloat(Nx)\n"),
+        "statements should be split and indented as a block:\n{out}"
+    );
+    assert_idempotent(src, &config);
+}
+
+#[test]
+fn test_idempotent_fypp_macro_overflowing_after_last_comma() {
+    let src = "module m\ncontains\nsubroutine s\nif (a) then\nif (a) then\nif (a) then\n$:GPU_PARALLEL_LOOP(collapse=4,private='[i, j, k, l, slopeL, slopeR, slope]')\nend if\nend if\nend if\nend subroutine s\nend module m\n";
+    assert_idempotent(src, &with_line_length(90));
+}
+
+#[test]
+fn test_fypp_directive_with_python_not_equal_is_not_split() {
+    // `!=` in a `#:set` line is Python, not the start of a Fortran comment.
+    let line =
+        "    #:set emitted_clause = clause_val.strip() != '' or extraOmpArgs_val.strip() != ''";
+    let src = format!("#:def m()\n{line}\n#:enddef\n");
+    let out = ffmt::format_string_with_config(&src, &with_line_length(80));
+    assert!(
+        out.contains(line.trim_start()),
+        "directive was altered:\n{out}"
+    );
+}
+
+// Inputs taken from real code that a second run used to change. The first two
+// are long fixtures, so they live under tests/fixtures/idempotence/.
+
+#[test]
+fn test_idempotent_blank_lines_after_consumed_doxygen_continuation() {
+    // `!<` + `!!` pairs are merged, leaving adjacent blank lines that must
+    // collapse before declarations are compacted.
+    let src = include_str!("fixtures/idempotence/consumed_doxygen_blanks.f90");
+    assert_idempotent(src, &with_line_length(100));
+}
+
+#[test]
+fn test_idempotent_namelist_wrap_with_bare_commas() {
+    // Bare commas gain a space where a line breaks; the rest must match.
+    let src = include_str!("fixtures/idempotence/namelist_bare_commas.f90");
+    assert_idempotent(src, &with_line_length(100));
+}
+
+#[test]
+fn test_idempotent_hoisted_continuation_comment() {
+    // A comment inside a continuation is hoisted above the statement and must
+    // merge with the comment before it exactly as written comments do.
+    let src = include_str!("fixtures/idempotence/hoisted_continuation_comment.f90");
+    assert_idempotent(src, &with_line_length(80));
+}
+
+#[test]
+fn test_idempotent_wrapped_declaration_after_doc_comment() {
+    // Alignment lengthens the declaration after `!<` is moved above it; the
+    // wrapped result must still count as a declaration.
+    let src = include_str!("fixtures/idempotence/wrapped_declaration.f90");
+    assert_idempotent(src, &with_line_length(60));
+}
+
+#[test]
+fn test_idempotent_trailing_semicolon_on_long_line() {
+    let src = include_str!("fixtures/idempotence/trailing_semicolon.f90");
+    let config = Config {
+        indent_width: 2,
+        ..with_line_length(90)
+    };
+    assert_idempotent(src, &config);
+}
+
+#[test]
+fn test_idempotent_wrap_with_space_before_member_access() {
+    // Source left by an older ffmt reads `ghost_points(q) %ip_loc`; a break
+    // between them must not be offered just because a space precedes the `%`.
+    let src = include_str!("fixtures/idempotence/break_before_member_access.f90");
+    assert_idempotent(src, &with_line_length(80));
+}
+
+#[test]
+fn test_align_assignments_leaves_continuation_arguments_alone() {
+    // `& no_create=None, ...` is a macro keyword argument, not an assignment.
+    let src = include_str!("fixtures/idempotence/fypp_def_keyword_arguments.fpp");
+    let config = Config {
+        align_assignments: ffmt::config::Toggle::Enable,
+        ..with_line_length(100)
+    };
+    let out = ffmt::format_string_with_config(src, &config);
+    assert!(
+        !out.contains("no_create  ="),
+        "continuation argument was padded:\n{out}"
+    );
+    assert_idempotent(src, &config);
+}
