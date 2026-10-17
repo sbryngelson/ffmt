@@ -623,3 +623,33 @@ fn test_only_colon_normalized_end_to_end() {
     let expected = "module m\n\n    use m_a, only: a\n    use, intrinsic :: iso_c_binding, only: c_int\n\n    implicit none\nend module m\n";
     assert_eq!(result, expected);
 }
+
+// ===== leading-ampersand =====
+
+const LONG_CALL: &str = "program p\ncall s_foo(aaaaaaaaaaaa, bbbbbbbbbbbb, cccccccccccc, dddddddddddd, eeeeeeeeeeee)\nend program\n";
+
+#[test]
+fn test_leading_ampersand_default_keeps_marker() {
+    let result = format_with_config("line-length = 40", LONG_CALL);
+    assert!(
+        result.contains("& cccc"),
+        "Expected leading &, got: {result}"
+    );
+}
+
+#[test]
+fn test_leading_ampersand_false_drops_marker() {
+    let cfg = "leading-ampersand = false\nline-length = 40";
+    let result = format_with_config(cfg, LONG_CALL);
+    assert!(
+        result.contains(" &\n"),
+        "Expected wrapped call, got: {result}"
+    );
+    assert!(
+        !result.contains("& "),
+        "Expected no leading &, got: {result}"
+    );
+    assert!(result.lines().all(|l| l.len() <= 40), "got: {result}");
+    // Idempotent
+    assert_eq!(result, format_with_config(cfg, &result));
+}

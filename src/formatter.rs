@@ -758,6 +758,12 @@ pub fn format_with_config(source: &str, config: &Config, range: Option<(usize, u
         output_lines = apply(output_lines, &|lines| align_ampersands(lines, ll));
     }
 
+    // Drop the optional leading & on continuation lines (last, so every
+    // earlier pass sees the canonical `& ` form)
+    if !config.leading_ampersand {
+        output_lines = apply(output_lines, &strip_leading_ampersands);
+    }
+
     let mut result = output_lines.join("\n");
     if !result.is_empty() && !result.ends_with('\n') {
         result.push('\n');
@@ -3267,6 +3273,85 @@ fn collapse_blank_lines(lines: &[String]) -> Vec<String> {
     collapsed
 }
 
+/// Scan one line of code, starting inside a string if `quote` is set.
+/// Returns the open string delimiter at end of line and whether the line ends
+/// with a continuation `&` (outside a string, before any comment).
+fn scan_continuation(line: &str, mut quote: Option<char>) -> (Option<char>, bool) {
+    let mut amp = false;
+    for c in line.chars() {
+        match quote {
+            Some(q) => {
+                // A `&` ending the line inside a character literal continues it
+                if c == q {
+                    quote = None;
+                    amp = false;
+                } else if c == '&' {
+                    amp = true;
+                } else if !c.is_whitespace() {
+                    amp = false;
+                }
+            }
+            None => match c {
+                '\'' | '"' => {
+                    quote = Some(c);
+                    amp = false;
+                }
+                '!' => break,
+                '&' => amp = true,
+                c if c.is_whitespace() => {}
+                _ => amp = false,
+            },
+        }
+    }
+    (quote, amp)
+}
+
+/// Remove the optional leading `&` from continuation lines. The `&` stays when
+/// the previous line ends inside a character literal (required there) and when
+/// dropping it would expose a `#`, `!`, Fypp, or empty line to the parser.
+fn strip_leading_ampersands(lines: &[String]) -> Vec<String> {
+    let mut result = Vec::with_capacity(lines.len());
+    let mut continued = false;
+    let mut quote: Option<char> = None;
+    // Fypp macro calls span lines with the `&` as part of their syntax; the
+    // next run does not read their continuation lines without it.
+    let mut fypp_call = false;
+    for line in lines {
+        let mut out = line.clone();
+        if continued {
+            let trimmed = line.trim_start();
+            if quote.is_none() && !fypp_call {
+                if let Some(rest) = trimmed.strip_prefix('&') {
+                    let body = rest.trim_start();
+                    let keep = body.is_empty()
+                        || body.starts_with('!')
+                        || body.starts_with('#')
+                        || body.starts_with("$:")
+                        || body.starts_with("@:");
+                    if !keep {
+                        let indent = &line[..line.len() - trimmed.len()];
+                        out = format!("{}{}", indent, body);
+                    }
+                }
+            }
+        }
+        let trimmed = out.trim_start();
+        if trimmed.starts_with('#') || trimmed.starts_with("#:") {
+            // Preprocessor lines between continuation lines do not end the statement
+        } else if !trimmed.starts_with('!') || quote.is_some() {
+            if !continued {
+                fypp_call = trimmed.starts_with("$:") || trimmed.starts_with("@:");
+            }
+            let start = if continued { quote } else { None };
+            let (q, amp) = scan_continuation(&out, start);
+            quote = q;
+            continued = amp;
+        }
+        result.push(out);
+    }
+    result
+}
+
 /// Align trailing `&` continuation markers at the column limit.
 /// Lines ending with ` &` are padded so `&` sits at the column limit position.
 fn align_ampersands(lines: &[String], col_limit: usize) -> Vec<String> {
@@ -3688,4 +3773,51 @@ fn normalize_comma_spacing(s: &str) -> String {
     result.push_str(&s[plain_start..]);
 
     result
+}
+
+#[cfg(test)]
+mod leading_ampersand_tests {
+    use super::strip_leading_ampersands;
+
+    fn strip(lines: &[&str]) -> Vec<String> {
+        strip_leading_ampersands(&lines.iter().map(|l| l.to_string()).collect::<Vec<_>>())
+    }
+
+    #[test]
+    fn strips_marker_and_keeps_alignment() {
+        assert_eq!(
+            strip(&["call s_foo(x, &", "           & y, z)"]),
+            ["call s_foo(x, &", "           y, z)"]
+        );
+    }
+
+    #[test]
+    fn keeps_marker_inside_string() {
+        let lines = ["print *, 'abc &", "    &def'"];
+        assert_eq!(strip(&lines), lines);
+    }
+
+    #[test]
+    fn keeps_marker_in_fypp_macro_call_with_quoted_list() {
+        let lines = ["$:GPU_LOOP(private='[a, b, &", "    & c, &", "    d]')"];
+        assert_eq!(strip(&lines), lines);
+    }
+
+    #[test]
+    fn keeps_marker_in_fypp_macro_call() {
+        let lines = ["$:GPU_LOOP(a, &", "    & b)"];
+        assert_eq!(strip(&lines), lines);
+    }
+
+    #[test]
+    fn keeps_marker_before_unsafe_content() {
+        let lines = ["x = a + &", "    & #ifdef"];
+        assert_eq!(strip(&lines), lines);
+    }
+
+    #[test]
+    fn ignores_ampersand_in_comment_and_non_continued_lines() {
+        let lines = ["x = 1 ! trailing &", "& y"];
+        assert_eq!(strip(&lines), lines);
+    }
 }
