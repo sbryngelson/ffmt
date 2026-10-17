@@ -3281,10 +3281,15 @@ fn scan_continuation(line: &str, mut quote: Option<char>) -> (Option<char>, bool
     for c in line.chars() {
         match quote {
             Some(q) => {
+                // A `&` ending the line inside a character literal continues it
                 if c == q {
                     quote = None;
+                    amp = false;
+                } else if c == '&' {
+                    amp = true;
+                } else if !c.is_whitespace() {
+                    amp = false;
                 }
-                amp = false;
             }
             None => match c {
                 '\'' | '"' => {
@@ -3308,11 +3313,14 @@ fn strip_leading_ampersands(lines: &[String]) -> Vec<String> {
     let mut result = Vec::with_capacity(lines.len());
     let mut continued = false;
     let mut quote: Option<char> = None;
+    // Fypp macro calls span lines with the `&` as part of their syntax; the
+    // next run does not read their continuation lines without it.
+    let mut fypp_call = false;
     for line in lines {
         let mut out = line.clone();
         if continued {
             let trimmed = line.trim_start();
-            if quote.is_none() {
+            if quote.is_none() && !fypp_call {
                 if let Some(rest) = trimmed.strip_prefix('&') {
                     let body = rest.trim_start();
                     let keep = body.is_empty()
@@ -3331,6 +3339,9 @@ fn strip_leading_ampersands(lines: &[String]) -> Vec<String> {
         if trimmed.starts_with('#') || trimmed.starts_with("#:") {
             // Preprocessor lines between continuation lines do not end the statement
         } else if !trimmed.starts_with('!') || quote.is_some() {
+            if !continued {
+                fypp_call = trimmed.starts_with("$:") || trimmed.starts_with("@:");
+            }
             let start = if continued { quote } else { None };
             let (q, amp) = scan_continuation(&out, start);
             quote = q;
@@ -3783,6 +3794,18 @@ mod leading_ampersand_tests {
     #[test]
     fn keeps_marker_inside_string() {
         let lines = ["print *, 'abc &", "    &def'"];
+        assert_eq!(strip(&lines), lines);
+    }
+
+    #[test]
+    fn keeps_marker_in_fypp_macro_call_with_quoted_list() {
+        let lines = ["$:GPU_LOOP(private='[a, b, &", "    & c, &", "    d]')"];
+        assert_eq!(strip(&lines), lines);
+    }
+
+    #[test]
+    fn keeps_marker_in_fypp_macro_call() {
+        let lines = ["$:GPU_LOOP(a, &", "    & b)"];
         assert_eq!(strip(&lines), lines);
     }
 
