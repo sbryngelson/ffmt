@@ -377,8 +377,9 @@ fn classify_fortran(trimmed: &str) -> LineKind {
             return LineKind::FortranStatement;
         }
         // type is (...) was already handled in continuations above
-        // type :: name, type::name, or type, attrs :: name -> definition (block open)
-        let re_type_def = regex!(r"(?i)^type\s*(::|,|\s)");
+        // type :: name, type::name, type name, or type, attrs :: name -> definition
+        // (block open). `type = 0` is an assignment to a variable named type.
+        let re_type_def = regex!(r"(?i)^type\s*(::|,|\s+\w)");
         if re_type_def.is_match(line) {
             return LineKind::FortranBlockOpen;
         }
