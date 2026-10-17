@@ -995,3 +995,24 @@ fn test_overflow_still_absorbs_ordinary_prose() {
         "overflow did not reflow into the following prose line:\n{out}"
     );
 }
+
+// --- Idempotence: operators are modernized before wrapping ---
+
+#[test]
+fn test_modernized_operators_wrap_is_idempotent() {
+    // `.lt.` -> `<` shortens the statement; wrapping the longer legacy form
+    // used to leave a layout that a second run re-wrapped.
+    let src = "program t\n\
+      if(umask(i-1,j,k).lt.0.5d0.and.umask(i,j,k).lt.0.5d0.and. &\n\
+      vmask(i,j-1,k).lt.0.5d0.and.vmask(i,j,k).lt.0.5d0.and. &\n\
+      wmask(i,j,k-1).lt.0.5d0.and.wmask(i,j,k).lt.0.5d0) then ! in solid\n\
+      x = 1\n\
+      end if\nend program t\n";
+    let config = Config {
+        line_length: 100,
+        ..Config::default()
+    };
+    let once = ffmt::format_string_with_config(src, &config);
+    let twice = ffmt::format_string_with_config(&once, &config);
+    assert_eq!(once, twice, "second run changed the output:\n{once}");
+}

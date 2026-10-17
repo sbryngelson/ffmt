@@ -909,6 +909,12 @@ fn process_line(line: &str, config: &Config) -> String {
 
     result = normalize_whitespace(&result, &config.whitespace);
 
+    // Modernize before any rewrap: `.lt.` -> `<` shortens the line, and wrapping
+    // the longer form makes a second run wrap differently.
+    if config.modernize_operators.is_enabled() {
+        result = modernize_relational_operators(&[result]).remove(0);
+    }
+
     if config.keyword_paren_space.is_enabled() {
         result = crate::whitespace::add_keyword_paren_spaces(&result);
     }
