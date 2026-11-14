@@ -1,12 +1,13 @@
 # ffmt
 
 [![PyPI](https://img.shields.io/pypi/v/ffmt.svg)](https://pypi.org/project/ffmt/)
+[![crates.io](https://img.shields.io/crates/v/ffmt.svg)](https://crates.io/crates/ffmt)
 [![CI](https://github.com/sbryngelson/ffmt/actions/workflows/ci.yml/badge.svg)](https://github.com/sbryngelson/ffmt/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![GitHub Marketplace](https://img.shields.io/badge/Marketplace-ffmt-blue?logo=github)](https://github.com/marketplace/actions/ffmt-fortran-formatter)
 [![Docs](https://readthedocs.org/projects/ffmt-fortran/badge/?version=latest)](https://ffmt-fortran.readthedocs.io)
 
-A fast, configurable Fortran formatter with support for Fypp, Doxygen, and OpenACC/OpenMP directives. Written in Rust. Installable via `pip`.
+A fast, configurable Fortran formatter with support for Fypp, Doxygen, and OpenACC/OpenMP directives. Written in Rust. Installable via `pip` or `cargo`.
 
 **[Documentation](https://ffmt-fortran.readthedocs.io)** | **[Configuration](https://ffmt-fortran.readthedocs.io/en/latest/configuration/)** | **[Changelog](https://github.com/sbryngelson/ffmt/releases)**
 
