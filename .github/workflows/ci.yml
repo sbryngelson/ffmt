@@ -15,7 +15,7 @@ jobs:
         with:
           components: clippy, rustfmt
       - run: cargo fmt --check
-      - run: cargo test
+      - run: cargo test --locked
       - run: cargo clippy -- -D warnings
 
       # Dogfood: our own test fixtures should be formatted
